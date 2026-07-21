@@ -1,3 +1,4 @@
+import ast
 from collections import Counter
 
 import pytest
@@ -12,6 +13,7 @@ from milvus_client.expressions.expression_test_utils import (
     insert_by_segment_mode,
     prepare_loaded_empty_collection_for_segment,
     register_collection_cleanup,
+    wait_for_materialized_index,
     wait_for_segment_mode,
 )
 from milvus_client.expressions.filtering_case_matrix import (
@@ -24,6 +26,7 @@ from milvus_client.expressions.filtering_case_matrix import (
     JSON_MIXED_TYPE_IN_51489_CASES,
     JSON_MIXED_TYPE_OR_51568_CASES,
     ORDER_SENSITIVE_EXPRESSIONS,
+    REAL_INDEX_ROW_COUNT,
     SAME_FIELD_OR_FANOUT_EXPRESSIONS_L1,
     SEGMENT_MODES_ACTIVE,
 )
@@ -32,6 +35,7 @@ from pymilvus import DataType, MilvusException
 default_pk = "id"
 default_vec = "vector"
 default_dim = 8
+REGRESSION_VECTOR_INDEX_NAME = "idx_regression_vector_hnsw"
 
 KNOWN_ISSUE_51568_LOSS_IDS = {
     "float_int_or_5": [1, 2, 5],
@@ -104,6 +108,29 @@ def hit_id(hit):
 
 def sorted_hit_ids(hits):
     return sorted(hit_id(hit) for hit in hits)
+
+
+def vector_for_id(row_id):
+    return [float(((row_id + 1) * (dimension + 3)) % 17 + 1) / 20.0 for dimension in range(default_dim)]
+
+
+def assert_cosine_search_shape(result):
+    assert len(result) == 1, f"expected one nq result group, got {len(result)}"
+    hits = result[0]
+    distances = [hit["distance"] for hit in hits]
+    assert distances == sorted(distances, reverse=True), f"COSINE distances are not descending: {distances}"
+    return hits
+
+
+def assert_expression_fanout(expr, expected_count):
+    if " in [" in expr.lower() and " and " not in expr.lower() and " or " not in expr.lower():
+        in_offset = expr.lower().index(" in ") + len(" in ")
+        list_start = expr.index("[", in_offset)
+        values = ast.literal_eval(expr[list_start : expr.rindex("]") + 1])
+        actual_count = len(values)
+    else:
+        actual_count = expr.lower().count(" and ") + expr.lower().count(" or ") + 1
+    assert actual_count == expected_count, f"{expr} has fanout {actual_count}, expected {expected_count}"
 
 
 def id_delta(actual_ids, expected_ids):
@@ -180,21 +207,22 @@ def search_ids_or_xfail_known_loss(
     context,
 ):
     try:
-        hits = client.search(
+        result = client.search(
             collection_name,
             data=[[0.1] * default_dim],
             anns_field=default_vec,
-            search_params={"metric_type": "COSINE", "params": {}},
+            search_params={"metric_type": "COSINE", "params": {"ef": 64}},
             filter=expr,
             output_fields=[default_pk],
             limit=30,
-        )[0]
+        )
     except MilvusException as exc:
         expected_value_case = known_error_value_cases.get(case_name)
         if expected_value_case and is_known_executor_type_assertion(exc, expected_value_case):
             pytest.xfail(f"Known issue {issue}: {context} failed with {exc}")
         raise
 
+    hits = assert_cosine_search_shape(result)
     assert_ids_or_xfail_known_loss(
         sorted_hit_ids(hits),
         expected_ids,
@@ -312,7 +340,7 @@ def build_order_rows():
         {
             default_pk: 1,
             "age": 8,
-            "score": 95.0,
+            "score": 85.0,
             "active": True,
             "tag": "qa",
             "meta": {"group": "qa", "rank": 1, "p": 1},
@@ -320,7 +348,7 @@ def build_order_rows():
         {
             default_pk: 2,
             "age": 12,
-            "score": 88.0,
+            "score": 91.0,
             "active": True,
             "tag": "qa",
             "meta": {"group": "qa", "rank": 1, "p": 2},
@@ -389,6 +417,38 @@ def build_order_rows():
             "tag": "dev",
             "meta": {"group": "dev", "rank": 10, "p": 10},
         },
+        {
+            default_pk: 11,
+            "age": 12,
+            "score": 80.0,
+            "active": False,
+            "tag": "dev",
+            "meta": {"group": "control", "rank": 1, "p": 11},
+        },
+        {
+            default_pk: 12,
+            "age": 8,
+            "score": 80.0,
+            "active": False,
+            "tag": "dev",
+            "meta": {"group": "control", "rank": 3, "p": 12},
+        },
+        {
+            default_pk: 13,
+            "age": 12,
+            "score": 95.0,
+            "active": False,
+            "tag": "dev",
+            "meta": {"group": "control", "rank": 3, "p": 13},
+        },
+        {
+            default_pk: 14,
+            "age": 12,
+            "score": 80.0,
+            "active": True,
+            "tag": "dev",
+            "meta": {"group": "control", "rank": 3, "p": 14},
+        },
     ]
 
 
@@ -437,20 +497,38 @@ class TestFilterRegressions(TestMilvusClientV2Base):
             8: "no",
         }
         rows = []
-        for i in range(1, 21):
+        for i in range(1, REAL_INDEX_ROW_COUNT + 1):
             meta = {"p": i, "arr": [i, i + 10]}
             if i in bool_mixed_values:
                 meta["b"] = bool_mixed_values[i]
             rows.append(
                 {
                     default_pk: i,
-                    default_vec: [float(i) / 20.0] * default_dim,
+                    default_vec: vector_for_id(i),
                     "meta": meta,
                 }
             )
         self.insert(client, collection_name, data=rows)
         self.flush(client, collection_name)
-        create_minimal_vector_index(self, client, collection_name, vector_field=default_vec)
+        index_params = self.prepare_index_params(client)[0]
+        index_params.add_index(
+            default_vec,
+            index_name=REGRESSION_VECTOR_INDEX_NAME,
+            index_type="HNSW",
+            metric_type="COSINE",
+            params={"M": 8, "efConstruction": 64},
+        )
+        self.create_index(client, collection_name, index_params=index_params)
+        self.__class__.regression_vector_index_info = wait_for_materialized_index(
+            self,
+            client,
+            collection_name,
+            REGRESSION_VECTOR_INDEX_NAME,
+            expected_indexed_rows=REAL_INDEX_ROW_COUNT,
+        )
+        assert self.regression_vector_index_info["index_name"] == REGRESSION_VECTOR_INDEX_NAME
+        assert self.regression_vector_index_info["field_name"] == default_vec
+        assert self.regression_vector_index_info["total_rows"] == REAL_INDEX_ROW_COUNT
         self.load_collection(client, collection_name)
         yield collection_name
 
@@ -485,6 +563,7 @@ class TestFilterRegressions(TestMilvusClientV2Base):
         expected_ids,
     ):
         client = self._client(alias=self.shared_alias)
+        assert_expression_fanout(expr, fanout_count)
         query_ids_or_xfail_known_loss(
             client,
             regression_51568_collection,
@@ -535,10 +614,16 @@ class TestFilterRegressions(TestMilvusClientV2Base):
             known_executor_value_case=KNOWN_ISSUE_51489_IN_ERROR_VALUE_CASES["int_string_in"],
         )
 
-    @pytest.mark.tags(CaseLabel.L0)
     @pytest.mark.parametrize(
         "case_name, expr, expected_ids",
-        [pytest.param(*case, id=case[0]) for case in JSON_BOOL_MIXED_51567_CONTROL_CASES],
+        [
+            pytest.param(
+                *case,
+                marks=pytest.mark.tags(CaseLabel.L0 if case[0] != "bool_int_or_two_branches" else CaseLabel.L1),
+                id=case[0],
+            )
+            for case in JSON_BOOL_MIXED_51567_CONTROL_CASES
+        ],
     )
     def test_json_bool_mixed_type_controls_51567(
         self,
@@ -690,6 +775,7 @@ class TestFilterRegressions(TestMilvusClientV2Base):
         expected_ids,
     ):
         client = self._client(alias=self.shared_alias)
+        assert_expression_fanout(expr, fanout_count)
         assert_query_ids(self, client, order_fanout_collection, expr, expected_ids, pk_field=default_pk)
 
     @pytest.mark.tags(CaseLabel.L2)
@@ -706,6 +792,7 @@ class TestFilterRegressions(TestMilvusClientV2Base):
         expected_ids,
     ):
         client = self._client(alias=self.shared_alias)
+        assert_expression_fanout(expr, fanout_count)
         assert_query_ids(self, client, order_fanout_collection, expr, expected_ids, pk_field=default_pk)
 
     @pytest.mark.parametrize(
@@ -768,6 +855,7 @@ class TestFilterRegressions(TestMilvusClientV2Base):
         expected_ids,
     ):
         client = self._client(alias=self.shared_alias)
+        assert_expression_fanout(expr, fanout_count)
         search_ids_or_xfail_known_loss(
             client,
             regression_51568_collection,
@@ -826,6 +914,7 @@ class TestFilterRegressions(TestMilvusClientV2Base):
         segment_mode,
     ):
         client = self._client()
+        assert_expression_fanout(expr, fanout_count)
         collection_name = cf.gen_collection_name_by_testcase_name()
         prepare_loaded_empty_collection_for_segment(
             self,

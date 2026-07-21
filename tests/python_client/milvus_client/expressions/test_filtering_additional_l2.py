@@ -17,7 +17,7 @@ from pymilvus import DataType
 default_pk = "id"
 default_vec = "vector"
 default_dim = 8
-STRUCT_INDEX_ROW_COUNT = 2048
+STRUCT_INDEX_ROW_COUNT = 3000
 
 
 def vector_for_id(row_id):
@@ -28,21 +28,11 @@ STRUCT_ARRAY_FILTER_CASES = [
     (
         "element_filter_same_element_compound",
         'element_filter(events, $[rank] >= 10 && $[tag] == "qa")',
-        [1, 2, 2],
-    ),
-    (
-        "match_any_compound",
-        'MATCH_ANY(events, $[active] == true && $[tag] == "qa")',
-        [1, 2, 5],
+        [1, 2, 2, 9],
     ),
     (
         "match_all_scoped",
         "id in [1, 2, 3, 5] && MATCH_ALL(events, $[rank] >= 10)",
-        [2],
-    ),
-    (
-        "match_least_two",
-        "MATCH_LEAST(events, $[rank] >= 10, threshold=2)",
         [2],
     ),
     (
@@ -53,7 +43,7 @@ STRUCT_ARRAY_FILTER_CASES = [
     (
         "match_exact_one",
         "MATCH_EXACT(events, $[rank] >= 10, threshold=1)",
-        [1, 5],
+        [1, 5, 8, 9],
     ),
 ]
 
@@ -66,12 +56,12 @@ STRUCT_ARRAY_SUBFIELD_FILTER_CASES = [
     ("array_contains_float", "array_contains(events[ratio_f32], 2.25)", [2]),
     ("array_contains_all_varchar", 'array_contains_all(events[tag], ["qa", "dev"])', [1]),
     ("array_contains_any_varchar", 'array_contains_any(events[tag], ["ops", "missing"])', [5]),
-    ("array_contains_bool", "array_contains(events[active], true)", [1, 2, 5]),
-    ("fixed_index_int", "events[0][rank] >= 10", [1, 2, 5]),
+    ("array_contains_bool", "array_contains(events[active], true)", [1, 2, 5, 8]),
+    ("fixed_index_int", "events[0][rank] >= 10", [1, 2, 5, 8, 9]),
     ("fixed_index_varchar", 'events[1][tag] == "qa"', [2, 5]),
     ("fixed_index_double", "events[0][score] > 2.0", [2, 5]),
     ("parent_is_null", "events is null", [6, 7]),
-    ("parent_is_not_null", "events is not null", [1, 2, 3, 4, 5]),
+    ("parent_is_not_null", "events is not null", [1, 2, 3, 4, 5, 8, 9]),
 ]
 
 STRUCT_ARRAY_OPERATOR_MATRIX_CASES = [
@@ -79,15 +69,15 @@ STRUCT_ARRAY_OPERATOR_MATRIX_CASES = [
     ("element_ne_bool", "id <= 5 && element_filter(events, $[active] != true)", [1, 3, 5]),
     ("fixed_lt", "events[0][rank] < 10", [3]),
     ("fixed_le", "events[0][rank] <= 10", [1, 3]),
-    ("fixed_gt", "events[0][rank] > 10", [2, 5]),
-    ("fixed_ge", "events[0][rank] >= 10", [1, 2, 5]),
-    ("fixed_ne", "events[0][rank] != 10", [2, 3, 5]),
-    ("fixed_in", 'events[0][tag] in ["qa", "ops"]', [1, 2, 5]),
-    ("fixed_not_in", 'events[0][tag] not in ["qa", "ops"]', [3]),
+    ("fixed_gt", "events[0][rank] > 10", [2, 5, 8, 9]),
+    ("fixed_ge", "events[0][rank] >= 10", [1, 2, 5, 8, 9]),
+    ("fixed_ne", "events[0][rank] != 10", [2, 3, 5, 8, 9]),
+    ("fixed_in", 'events[0][tag] in ["qa", "ops"]', [1, 2, 5, 9]),
+    ("fixed_not_in", 'events[0][tag] not in ["qa", "ops"]', [3, 8]),
     ("fixed_chained_range", "10 <= events[0][rank] <= 12", [1, 2]),
     ("fixed_reverse_chained_range", "12 >= events[0][rank] >= 10", [1, 2]),
-    ("element_like_prefix", 'element_filter(events, $[tag] like "q%")', [1, 2, 2, 5]),
-    ("element_not", 'id <= 5 && element_filter(events, not ($[tag] == "qa"))', [1, 3, 5]),
+    ("element_like_prefix", 'element_filter(events, $[tag] like "q%")', [1, 2, 2, 5, 9]),
+    ("element_not", 'element_filter(events, not ($[tag] == "qa"))', [1, 3, 5, 8]),
     ("element_or", 'element_filter(events, $[tag] == "ops" || $[score] < 0.2)', [1, 5]),
     ("element_add", "element_filter(events, $[rank] + 2 == 12)", [1]),
     ("element_sub", "element_filter(events, $[rank] - 1 == 12)", [5]),
@@ -95,18 +85,18 @@ STRUCT_ARRAY_OPERATOR_MATRIX_CASES = [
     ("element_div", "element_filter(events, $[score] / 2.0 > 1.0)", [2, 2, 5]),
     ("element_mod", "element_filter(events, $[rank] % 5 == 0)", [1, 5]),
     ("element_constant_power", "element_filter(events, $[rank] == 2 ** 3 + 2)", [1]),
-    ("match_any_like", 'MATCH_ANY(events, $[tag] like "q%")', [1, 2, 5]),
+    ("match_any_like", 'MATCH_ANY(events, $[tag] like "q%")', [1, 2, 5, 9]),
     ("match_any_in", "MATCH_ANY(events, $[rank] in [10, 13])", [1, 5]),
-    ("match_any_not", "MATCH_ANY(events, not ($[active] == true))", [1, 3, 5]),
+    ("match_any_not", "MATCH_ANY(events, not ($[active] == true))", [1, 3, 5, 9]),
     ("match_exact_or", 'MATCH_EXACT(events, $[tag] == "qa" || $[rank] > 12, threshold=2)', [2, 5]),
 ]
 
 STRUCT_ARRAY_ELEMENT_FILTER_OFFSET_CASES = {
-    "element_filter_same_element_compound": [(1, 0), (2, 0), (2, 1)],
+    "element_filter_same_element_compound": [(1, 0), (2, 0), (2, 1), (9, 0)],
     "element_eq_int8": [(2, 0)],
     "element_ne_bool": [(1, 1), (3, 0), (5, 0)],
-    "element_like_prefix": [(1, 0), (2, 0), (2, 1), (5, 1)],
-    "element_not": [(1, 1), (3, 0), (5, 0)],
+    "element_like_prefix": [(1, 0), (2, 0), (2, 1), (5, 1), (9, 0)],
+    "element_not": [(1, 1), (3, 0), (5, 0), (8, 0)],
     "element_or": [(1, 1), (5, 0)],
     "element_add": [(1, 0)],
     "element_sub": [(5, 0)],
@@ -118,21 +108,30 @@ STRUCT_ARRAY_ELEMENT_FILTER_OFFSET_CASES = {
 
 STRUCT_ARRAY_MATCH_NULL_EMPTY_CASES = [
     ("match_any", 'MATCH_ANY(events, $[active] == true && $[tag] == "qa")', [1, 2, 5]),
-    ("match_all_vacuous_empty", "MATCH_ALL(events, $[rank] >= 10)", [2, 4]),
+    ("match_all_vacuous_empty", "MATCH_ALL(events, $[rank] >= 10)", [2, 4, 8, 9]),
     ("match_least_two", "MATCH_LEAST(events, $[rank] >= 10, threshold=2)", [2]),
-    ("match_most_one", "MATCH_MOST(events, $[rank] >= 10, threshold=1)", [1, 3, 4, 5]),
+    ("match_most_one", "MATCH_MOST(events, $[rank] >= 10, threshold=1)", [1, 3, 4, 5, 8, 9]),
     ("match_exact_zero", "MATCH_EXACT(events, $[rank] >= 10, threshold=0)", [3, 4]),
     ("not_match_any", "not MATCH_ANY(events, $[rank] >= 10)", [3, 4]),
 ]
 
 STRUCT_ARRAY_NEGATIVE_FILTER_CASES = [
-    ("unknown_subfield", "MATCH_ANY(events, $[missing] == 1)", "events[missing]"),
+    ("unknown_subfield", "MATCH_ANY(events, $[missing] == 1)", "array field not found: events[missing]"),
     (
         "wrong_literal_type",
         'element_filter(events, $[rank] == "bad")',
         "comparisons between Int64 and VarChar are not supported",
     ),
-    ("negative_threshold", "MATCH_LEAST(events, $[rank] >= 10, threshold=-1)", "threshold"),
+    (
+        "zero_threshold",
+        "MATCH_LEAST(events, $[rank] >= 10, threshold=0)",
+        "count in MATCH_LEAST must be positive",
+    ),
+    (
+        "negative_threshold",
+        "MATCH_LEAST(events, $[rank] >= 10, threshold=-1)",
+        "expecting IntegerConstant",
+    ),
     ("field_power_rejected", "element_filter(events, $[rank] ** 2 == 100)", "power can only apply on constants"),
 ]
 
@@ -141,7 +140,7 @@ STRUCT_ARRAY_INDEX_CONSISTENCY_CASES = [
         "stl_sort_rank_match_any",
         "MATCH_ANY(events_plain, $[rank] >= 10)",
         "MATCH_ANY(events_indexed, $[rank] >= 10)",
-        [1, 2, 5],
+        [1, 2, 5, 1023, 1024],
     ),
     (
         "inverted_tag_contains_any",
@@ -153,7 +152,7 @@ STRUCT_ARRAY_INDEX_CONSISTENCY_CASES = [
         "bitmap_active_contains",
         "array_contains(events_plain[active], true)",
         "array_contains(events_indexed[active], true)",
-        [1, 2, 5],
+        [1, 2, 5, 1023, 2047],
     ),
     (
         "mixed_indexed_subfields",
@@ -286,11 +285,48 @@ def build_struct_array_rows():
             default_pk: 7,
             default_vec: vector_for_id(7),
         },
+        {
+            default_pk: 8,
+            default_vec: vector_for_id(8),
+            "events": [
+                {
+                    "rank": 14,
+                    "tag": "dev",
+                    "active": True,
+                    "score": 0.3,
+                    "level_i8": 8,
+                    "shard_i16": 80,
+                    "count_i32": 800,
+                    "ratio_f32": 0.8,
+                }
+            ],
+        },
+        {
+            default_pk: 9,
+            default_vec: vector_for_id(9),
+            "events": [
+                {
+                    "rank": 16,
+                    "tag": "qa",
+                    "active": False,
+                    "score": 0.4,
+                    "level_i8": 9,
+                    "shard_i16": 90,
+                    "count_i32": 900,
+                    "ratio_f32": 0.9,
+                }
+            ],
+        },
     ]
 
 
 def build_struct_array_index_rows(row_count=STRUCT_INDEX_ROW_COUNT):
     rows = []
+    controls = {
+        1023: {"rank": 14, "tag": "dev", "active": True},
+        1024: {"rank": 15, "tag": "qa", "active": False},
+        2047: {"rank": 5, "tag": "qa", "active": True},
+    }
     for row in build_struct_array_rows()[:5]:
         events = row["events"]
         rows.append(
@@ -302,11 +338,10 @@ def build_struct_array_index_rows(row_count=STRUCT_INDEX_ROW_COUNT):
             }
         )
     for row_id in range(6, row_count + 1):
+        control = controls.get(row_id, {"rank": 0, "tag": "filler", "active": False})
         events = [
             {
-                "rank": 0,
-                "tag": "filler",
-                "active": False,
+                **control,
                 "score": 0.0,
                 "level_i8": 0,
                 "shard_i16": 0,
@@ -357,6 +392,7 @@ def hit_id(hit):
 def assert_struct_array_filter_result(testcase, client, collection_name, case_name, expr, expected_ids):
     if "element_filter(" in expr:
         expected_id_offsets = STRUCT_ARRAY_ELEMENT_FILTER_OFFSET_CASES[case_name]
+        assert sorted(row_id for row_id, _ in expected_id_offsets) == sorted(expected_ids)
         assert_query_id_offsets(testcase, client, collection_name, expr, expected_id_offsets, pk_field=default_pk)
     else:
         assert_query_ids(testcase, client, collection_name, expr, expected_ids, pk_field=default_pk)
@@ -493,9 +529,14 @@ class TestFilteringStructArrayL2(TestMilvusClientV2Base):
             limit=10,
         )
 
-        assert sorted((row[default_pk], row["offset"]) for row in element_rows) == [(1, 0), (2, 0), (2, 1)]
+        assert sorted((row[default_pk], row["offset"]) for row in element_rows) == [
+            (1, 0),
+            (2, 0),
+            (2, 1),
+            (9, 0),
+        ]
         match_any_ids = sorted(row[default_pk] for row in match_any_rows)
-        assert match_any_ids == [1, 2]
+        assert match_any_ids == [1, 2, 9]
         assert len(match_any_ids) == len(set(match_any_ids))
         assert all("offset" not in row for row in match_any_rows)
 
@@ -507,7 +548,7 @@ class TestFilteringStructArrayL2(TestMilvusClientV2Base):
         expected: Search returns each matching row once and does not expose element offsets.
         """
         client = self._client(alias=self.shared_alias)
-        hits = client.search(
+        result = client.search(
             struct_array_collection,
             data=[vector_for_id(2)],
             anns_field=default_vec,
@@ -515,10 +556,14 @@ class TestFilteringStructArrayL2(TestMilvusClientV2Base):
             filter='MATCH_ANY(events, $[active] == true && $[tag] == "qa")',
             output_fields=[default_pk],
             limit=10,
-        )[0]
-        hit_ids = sorted(hit_id(hit) for hit in hits)
-        assert hit_ids == [1, 2, 5]
+        )
+        assert len(result) == 1
+        hits = result[0]
+        hit_ids = [hit_id(hit) for hit in hits]
+        assert hit_ids == [2, 5, 1]
         assert len(hit_ids) == len(set(hit_ids))
+        distances = [hit["distance"] for hit in hits]
+        assert distances == sorted(distances, reverse=True)
         assert all("offset" not in hit and "offset" not in hit.get("entity", {}) for hit in hits)
 
     @pytest.mark.tags(CaseLabel.L2)
@@ -539,7 +584,7 @@ class TestFilteringStructArrayL2(TestMilvusClientV2Base):
             output_fields=[default_pk],
             limit=3,
             check_task=CheckTasks.err_res,
-            check_items={ct.err_msg: "element_filter"},
+            check_items={ct.err_msg: "element_filter is only supported for element-level search on vector sub-fields"},
         )
 
     @pytest.mark.tags(CaseLabel.L2)
@@ -602,7 +647,7 @@ class TestFilteringStructArrayL2(TestMilvusClientV2Base):
                 pk_field=default_pk,
             )
             remaining_ids = query_ids(self, client, collection_name, "id >= 1", pk_field=default_pk)
-            assert remaining_ids == [1, 2, 3, 4, 6, 7]
+            assert remaining_ids == [1, 2, 3, 4, 6, 7, 8, 9]
         finally:
             if client.has_collection(collection_name):
                 client.drop_collection(collection_name)
@@ -622,6 +667,7 @@ class TestFilteringStructArrayIndexConsistencyL2(TestMilvusClientV2Base):
 
     shared_alias = "TestFilteringStructArrayIndexConsistencyL2"
     index_names = {
+        default_vec: "idx_struct_vector_hnsw",
         "events_indexed[rank]": "idx_events_rank_stl_sort",
         "events_indexed[tag]": "idx_events_tag_inverted",
         "events_indexed[active]": "idx_events_active_bitmap",
@@ -648,7 +694,13 @@ class TestFilteringStructArrayIndexConsistencyL2(TestMilvusClientV2Base):
         self.insert(client, collection_name, data=build_struct_array_index_rows())
         self.flush(client, collection_name)
         index_params = self.prepare_index_params(client)[0]
-        index_params.add_index(default_vec, index_type="FLAT", metric_type="COSINE")
+        index_params.add_index(
+            default_vec,
+            index_type="HNSW",
+            index_name=self.index_names[default_vec],
+            metric_type="COSINE",
+            params={"M": 8, "efConstruction": 64},
+        )
         index_params.add_index(
             field_name="events_indexed[rank]",
             index_type="STL_SORT",
@@ -686,7 +738,9 @@ class TestFilteringStructArrayIndexConsistencyL2(TestMilvusClientV2Base):
     @pytest.mark.tags(CaseLabel.L2)
     def test_struct_array_subfield_indexes_are_materialized(self, struct_array_index_collection):
         assert set(self.index_infos) == set(self.index_names.values())
-        for index_info in self.index_infos.values():
+        for index_name, index_info in self.index_infos.items():
+            assert index_info["index_name"] == index_name
+            assert index_info["total_rows"] == STRUCT_INDEX_ROW_COUNT
             assert index_info["indexed_rows"] >= STRUCT_INDEX_ROW_COUNT
             assert index_info["pending_index_rows"] == 0
 
@@ -714,6 +768,24 @@ class TestFilteringStructArrayIndexConsistencyL2(TestMilvusClientV2Base):
         assert plain_ids == expected_ids, f"{case_name} plain got {plain_ids}, expected {expected_ids}"
         assert indexed_ids == expected_ids, f"{case_name} indexed got {indexed_ids}, expected {expected_ids}"
         assert plain_ids == indexed_ids, f"{case_name} plain={plain_ids}, indexed={indexed_ids}"
+
+    @pytest.mark.tags(CaseLabel.L2)
+    def test_struct_array_materialized_index_search_prefilter(self, struct_array_index_collection):
+        client = self._client(alias=self.shared_alias)
+        result = client.search(
+            struct_array_index_collection,
+            data=[vector_for_id(2)],
+            anns_field=default_vec,
+            search_params={"metric_type": "COSINE", "params": {"ef": 64}},
+            filter='MATCH_ANY(events_indexed, $[active] == true && $[tag] == "qa")',
+            output_fields=[default_pk],
+            limit=10,
+        )
+        assert len(result) == 1
+        hits = result[0]
+        assert sorted(hit_id(hit) for hit in hits) == [1, 2, 5, 2047]
+        distances = [hit["distance"] for hit in hits]
+        assert distances == sorted(distances, reverse=True)
 
 
 @pytest.mark.xdist_group("TestFilteringRandomSampleL2")
@@ -749,7 +821,9 @@ class TestFilteringRandomSampleL2(TestMilvusClientV2Base):
         self.insert(
             client,
             collection_name,
-            data=[{default_pk: i, "bucket": i % 10, default_vec: vector_for_id(i)} for i in range(1000)],
+            data=[
+                {default_pk: i, "bucket": i % 10, default_vec: vector_for_id(i)} for i in range(STRUCT_INDEX_ROW_COUNT)
+            ],
         )
         self.flush(client, collection_name)
         create_minimal_vector_index(self, client, collection_name, vector_field=default_vec)
@@ -765,8 +839,9 @@ class TestFilteringRandomSampleL2(TestMilvusClientV2Base):
         """
         client = self._client(alias=self.shared_alias)
         base_ids = query_ids(self, client, random_sample_collection, "bucket == 3", pk_field=default_pk)
-        assert len(base_ids) == 100
+        assert len(base_ids) == 300
         sample_sizes = []
+        sample_id_sets = []
         base_id_set = set(base_ids)
         for _ in range(5):
             sampled_rows = client.query(
@@ -777,10 +852,11 @@ class TestFilteringRandomSampleL2(TestMilvusClientV2Base):
             )
             sampled_ids = sorted(row[default_pk] for row in sampled_rows)
             sample_sizes.append(len(sampled_ids))
+            sample_id_sets.append(tuple(sampled_ids))
             assert len(sampled_ids) == len(set(sampled_ids)), f"sample returned duplicate IDs: {sampled_ids}"
             assert set(sampled_ids).issubset(base_id_set)
 
-        assert all(20 <= sample_size <= 80 for sample_size in sample_sizes), (
-            "RANDOM_SAMPLE(0.5) should return a reduced statistical subset from 100 eligible rows; "
-            f"sample sizes were {sample_sizes}"
+        assert all(sample_size == 150 for sample_size in sample_sizes), (
+            f"RANDOM_SAMPLE(0.5) should return exactly 150 of 300 eligible rows, got {sample_sizes}"
         )
+        assert len(set(sample_id_sets)) > 1, "repeated RANDOM_SAMPLE calls returned the same ID set"

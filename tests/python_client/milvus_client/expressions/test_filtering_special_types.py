@@ -31,10 +31,18 @@ GEOMETRY_INDEX_NAME = "idx_geometry_rtree"
 
 
 def timestamptz_interval_params():
-    return [
-        pytest.param(case_name, expr, expected_ids, id=case_name)
-        for case_name, expr, expected_ids in TIMESTAMPTZ_INTERVAL_51538_CASES
-    ]
+    params = []
+    for case_name, expr, expected_ids in TIMESTAMPTZ_INTERVAL_51538_CASES:
+        for path_name, field_name in (("plain", "event_time_plain"), ("indexed", "event_time_indexed")):
+            params.append(
+                pytest.param(
+                    f"{case_name}_{path_name}",
+                    expr.replace("event_time_plain", field_name),
+                    expected_ids,
+                    id=f"{case_name}-{path_name}",
+                )
+            )
+    return params
 
 
 @pytest.mark.xdist_group("TestFilteringSpecialTypes")
@@ -193,6 +201,9 @@ class TestFilteringSpecialTypes(TestMilvusClientV2Base):
 
     @pytest.mark.tags(CaseLabel.L1)
     def test_timestamptz_index_is_materialized(self, timestamptz_collection):
+        assert self.timestamptz_index_info["field_name"] == "event_time_indexed"
+        assert self.timestamptz_index_info["index_type"] == "STL_SORT"
+        assert self.timestamptz_index_info["total_rows"] == REAL_INDEX_ROW_COUNT
         assert self.timestamptz_index_info["indexed_rows"] >= REAL_INDEX_ROW_COUNT
         assert self.timestamptz_index_info["pending_index_rows"] == 0
 
@@ -228,5 +239,8 @@ class TestFilteringSpecialTypes(TestMilvusClientV2Base):
 
     @pytest.mark.tags(CaseLabel.L2)
     def test_geometry_index_is_materialized(self, geometry_collection):
+        assert self.geometry_index_info["field_name"] == "geo_indexed"
+        assert self.geometry_index_info["index_type"] == "RTREE"
+        assert self.geometry_index_info["total_rows"] == REAL_INDEX_ROW_COUNT
         assert self.geometry_index_info["indexed_rows"] >= REAL_INDEX_ROW_COUNT
         assert self.geometry_index_info["pending_index_rows"] == 0

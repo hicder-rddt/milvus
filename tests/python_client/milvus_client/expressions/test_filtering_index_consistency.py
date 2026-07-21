@@ -7,6 +7,7 @@ from milvus_client.expressions.expression_test_utils import (
     query_ids,
     register_collection_cleanup,
     wait_for_materialized_index,
+    wait_for_segment_mode,
 )
 from milvus_client.expressions.filtering_case_matrix import (
     INDEX_CONSISTENCY_CASES,
@@ -20,6 +21,7 @@ default_vec = "vector"
 default_dim = 8
 
 INDEX_NAMES = {
+    default_vec: "idx_vector_hnsw",
     "i64_indexed": "idx_i64_inverted",
     "i64_bitmap_indexed": "idx_i64_bitmap",
     "name_indexed": "idx_name_ngram",
@@ -29,6 +31,19 @@ INDEX_NAMES = {
     "meta_active_indexed": "idx_meta_active",
     "meta_arr_indexed": "idx_meta_arr_scores",
 }
+
+
+def vector_for_id(row_id):
+    return [float(((row_id + 1) * (dimension + 5)) % 23 + 1) / 25.0 for dimension in range(default_dim)]
+
+
+def hit_id(hit):
+    if default_pk in hit:
+        return hit[default_pk]
+    entity = hit.get("entity", {})
+    if default_pk in entity:
+        return entity[default_pk]
+    return hit["id"]
 
 
 def index_case_params(field_types):
@@ -90,23 +105,26 @@ def make_index_consistency_row(i):
         name = f"account_{i}"
         meta = {"rank": 0, "group": "filler", "active": False}
         meta_arr = {"scores": [0.0]}
-    name_trie = "svcX_11" if i == 11 else name
+    name_trie = "svcX_11" if i == 11 else (f"svc_trie_{i}" if i in {2, 4, 6, 8, 10} else f"account_trie_{i}")
+    i64_value = i * 10 + 1
+    bitmap_value = 10000 + i
     return {
         default_pk: i,
-        "i64_plain": i,
-        "i64_indexed": i,
-        "i64_bitmap_plain": i,
-        "i64_bitmap_indexed": i,
+        default_vec: vector_for_id(i),
+        "i64_plain": i64_value,
+        "i64_indexed": i64_value,
+        "i64_bitmap_plain": bitmap_value,
+        "i64_bitmap_indexed": bitmap_value,
         "name_plain": name,
         "name_indexed": name,
         "name_trie_plain": name_trie,
         "name_trie_indexed": name_trie,
         "meta_plain": meta,
-        "meta_rank_indexed": meta,
-        "meta_group_indexed": meta,
-        "meta_active_indexed": meta,
+        "meta_rank_indexed": {"rank": meta["rank"], "group": "rank_decoy", "active": False},
+        "meta_group_indexed": {"rank": -1000, "group": meta["group"], "active": False},
+        "meta_active_indexed": {"rank": -2000, "group": "active_decoy", "active": meta["active"]},
         "meta_arr_plain": meta_arr,
-        "meta_arr_indexed": meta_arr,
+        "meta_arr_indexed": {"scores": meta_arr["scores"], "rank": -3000},
     }
 
 
@@ -134,7 +152,13 @@ class TestFilteringIndexConsistency(TestMilvusClientV2Base):
         self.flush(client, collection_name)
 
         index_params = self.prepare_index_params(client)[0]
-        index_params.add_index(default_vec, index_type="FLAT", metric_type="COSINE")
+        index_params.add_index(
+            default_vec,
+            index_type="HNSW",
+            index_name=INDEX_NAMES[default_vec],
+            metric_type="COSINE",
+            params={"M": 8, "efConstruction": 64},
+        )
         index_params.add_index(
             "i64_indexed",
             index_type="INVERTED",
@@ -224,7 +248,10 @@ class TestFilteringIndexConsistency(TestMilvusClientV2Base):
     @pytest.mark.tags(CaseLabel.L1)
     def test_scalar_indexes_are_materialized(self):
         assert set(self.index_infos) == set(INDEX_NAMES)
-        for index_info in self.index_infos.values():
+        for field_name, index_info in self.index_infos.items():
+            assert index_info["field_name"] == field_name
+            assert index_info["index_name"] == INDEX_NAMES[field_name]
+            assert index_info["total_rows"] == REAL_INDEX_ROW_COUNT
             assert index_info["indexed_rows"] >= REAL_INDEX_ROW_COUNT
             assert index_info["pending_index_rows"] == 0
 
@@ -239,6 +266,141 @@ class TestFilteringIndexConsistency(TestMilvusClientV2Base):
     @pytest.mark.parametrize("case", index_case_params({"JSON_ARRAY"}))
     def test_json_path_array_index_consistency(self, case):
         self.assert_index_consistency_case(case)
+
+    @pytest.mark.tags(CaseLabel.L1)
+    @pytest.mark.parametrize(
+        "expr, expected_ids",
+        [
+            pytest.param("i64_indexed in [31, 51, 71]", [3, 5, 7], id="int64_indexed_prefilter"),
+            pytest.param('meta_group_indexed["group"] == "qa"', [1, 4, 7, 10], id="json_indexed_prefilter"),
+        ],
+    )
+    def test_materialized_index_search_prefilter(self, expr, expected_ids):
+        client = self._client(alias=self.shared_alias)
+        result = client.search(
+            self.collection_name,
+            data=[vector_for_id(4)],
+            anns_field=default_vec,
+            search_params={"metric_type": "COSINE", "params": {"ef": 64}},
+            filter=expr,
+            output_fields=[default_pk],
+            limit=10,
+        )
+        assert len(result) == 1
+        hits = result[0]
+        assert sorted(hit_id(hit) for hit in hits) == expected_ids
+        distances = [hit["distance"] for hit in hits]
+        assert distances == sorted(distances, reverse=True)
+
+
+@pytest.mark.xdist_group("TestFilteringIndexedMixedSegments")
+class TestFilteringIndexedMixedSegments(TestMilvusClientV2Base):
+    shared_alias = "TestFilteringIndexedMixedSegments"
+    vector_index_name = "idx_mixed_vector_hnsw"
+    scalar_index_name = "idx_mixed_i64_inverted"
+
+    @pytest.fixture(scope="class")
+    def indexed_mixed_collection(self, request):
+        client = self._client(alias=self.shared_alias)
+        collection_name = "filter_indexed_mixed" + cf.gen_unique_str("_")
+        schema = self.create_schema(client, auto_id=False, enable_dynamic_field=False)[0]
+        schema.add_field(default_pk, DataType.INT64, is_primary=True)
+        schema.add_field(default_vec, DataType.FLOAT_VECTOR, dim=default_dim)
+        schema.add_field("i64_plain", DataType.INT64)
+        schema.add_field("i64_indexed", DataType.INT64)
+        self.create_collection(
+            client,
+            collection_name,
+            schema=schema,
+            force_teardown=False,
+            consistency_level="Strong",
+        )
+        register_collection_cleanup(self, request, self.shared_alias, collection_name)
+        sealed_rows = [
+            {
+                default_pk: row_id,
+                default_vec: vector_for_id(row_id),
+                "i64_plain": row_id * 10 + 1,
+                "i64_indexed": row_id * 10 + 1,
+            }
+            for row_id in range(1, REAL_INDEX_ROW_COUNT + 1)
+        ]
+        self.insert(client, collection_name, data=sealed_rows)
+        self.flush(client, collection_name)
+        index_params = self.prepare_index_params(client)[0]
+        index_params.add_index(
+            default_vec,
+            index_name=self.vector_index_name,
+            index_type="HNSW",
+            metric_type="COSINE",
+            params={"M": 8, "efConstruction": 64},
+        )
+        index_params.add_index(
+            "i64_indexed",
+            index_name=self.scalar_index_name,
+            index_type="INVERTED",
+        )
+        self.create_index(client, collection_name, index_params=index_params)
+        self.__class__.mixed_index_infos = {
+            index_name: wait_for_materialized_index(
+                self,
+                client,
+                collection_name,
+                index_name,
+                expected_indexed_rows=REAL_INDEX_ROW_COUNT,
+            )
+            for index_name in (self.vector_index_name, self.scalar_index_name)
+        }
+        self.load_collection(client, collection_name)
+        growing_rows = [
+            {default_pk: 3001, default_vec: vector_for_id(3001), "i64_plain": 31, "i64_indexed": 31},
+            {default_pk: 3002, default_vec: vector_for_id(3002), "i64_plain": 999999, "i64_indexed": 999999},
+            {default_pk: 3003, default_vec: vector_for_id(3003), "i64_plain": 51, "i64_indexed": 51},
+        ]
+        self.insert(client, collection_name, data=growing_rows)
+        wait_for_segment_mode(
+            client,
+            collection_name,
+            "mixed",
+            expected_row_count=REAL_INDEX_ROW_COUNT + len(growing_rows),
+            expected_sealed_rows=REAL_INDEX_ROW_COUNT,
+        )
+        yield collection_name
+
+    @pytest.mark.tags(CaseLabel.L2)
+    def test_materialized_index_and_growing_scan_merge(self, indexed_mixed_collection):
+        client = self._client(alias=self.shared_alias)
+        expected_fields = {
+            self.vector_index_name: default_vec,
+            self.scalar_index_name: "i64_indexed",
+        }
+        assert set(self.mixed_index_infos) == set(expected_fields)
+        for index_name, index_info in self.mixed_index_infos.items():
+            assert index_info["index_name"] == index_name
+            assert index_info["field_name"] == expected_fields[index_name]
+            assert index_info["total_rows"] == REAL_INDEX_ROW_COUNT
+            assert index_info["indexed_rows"] >= REAL_INDEX_ROW_COUNT
+            assert index_info["pending_index_rows"] == 0
+
+        plain_ids = query_ids(self, client, indexed_mixed_collection, "i64_plain in [31, 51]")
+        indexed_ids = query_ids(self, client, indexed_mixed_collection, "i64_indexed in [31, 51]")
+        assert plain_ids == [3, 5, 3001, 3003]
+        assert indexed_ids == plain_ids
+
+        result = client.search(
+            indexed_mixed_collection,
+            data=[vector_for_id(3001)],
+            anns_field=default_vec,
+            search_params={"metric_type": "COSINE", "params": {"ef": 64}},
+            filter="i64_indexed in [31, 51]",
+            output_fields=[default_pk],
+            limit=10,
+        )
+        assert len(result) == 1
+        hits = result[0]
+        assert sorted(hit_id(hit) for hit in hits) == plain_ids
+        distances = [hit["distance"] for hit in hits]
+        assert distances == sorted(distances, reverse=True)
 
 
 @pytest.mark.xdist_group("TestFilteringIndexNegative")

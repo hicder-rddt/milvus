@@ -25,6 +25,7 @@ from milvus_client.expressions.filtering_case_matrix import (
     JSON_KEY_NULL_FILTER_CASES,
     NEGATIVE_FILTER_ERROR_CASES,
     NULL_FILTER_CASES,
+    NUMERIC_DISTINCT_FILTER_CASES,
     ORDER_ARRAY_FUNCTION_EXPRESSIONS,
     SCALAR_FILTER_CASES,
     SEGMENT_MODES_ACTIVE,
@@ -59,6 +60,15 @@ L2_NEGATIVE_FILTER_ERROR_CASE_NAMES = {
 
 def case_params(cases):
     return [pytest.param(expr, expected_ids, id=case_name) for case_name, expr, expected_ids in cases]
+
+
+def numeric_case_params(cases):
+    params = []
+    for case_name, expr, expected_ids in cases:
+        field_name = case_name.split("_", 1)[0]
+        level = CaseLabel.L1 if field_name in {"i64", "f"} else CaseLabel.L2
+        params.append(pytest.param(expr, expected_ids, marks=pytest.mark.tags(level), id=case_name))
+    return params
 
 
 def negative_filter_error_params():
@@ -130,9 +140,14 @@ class TestFilteringExpressionMatrix(TestMilvusClientV2Base):
         self.__class__.collection_name = collection_name
         yield
 
-    @pytest.mark.tags(CaseLabel.L1)
-    @pytest.mark.parametrize("expr, expected_ids", case_params(NUMERIC_SCALAR_FILTER_CASES))
+    @pytest.mark.parametrize("expr, expected_ids", numeric_case_params(NUMERIC_SCALAR_FILTER_CASES))
     def test_numeric_scalar_filter_cases(self, expr, expected_ids):
+        client = self._client(alias=self.shared_alias)
+        assert_query_ids(self, client, self.collection_name, expr, expected_ids, pk_field=default_pk)
+
+    @pytest.mark.tags(CaseLabel.L2)
+    @pytest.mark.parametrize("expr, expected_ids", case_params(NUMERIC_DISTINCT_FILTER_CASES))
+    def test_numeric_type_distinct_filter_cases(self, expr, expected_ids):
         client = self._client(alias=self.shared_alias)
         assert_query_ids(self, client, self.collection_name, expr, expected_ids, pk_field=default_pk)
 
@@ -279,5 +294,6 @@ class TestFilteringExpressionMatrix(TestMilvusClientV2Base):
         for expr, expected_ids in [
             ("i64 >= 3 and i64 <= 6", [3, 4, 5, 6]),
             ('meta["rank"] >= 7', [7, 8, 9, 10]),
+            ("nullable_i64 is null or meta['rank'] >= 9", [3, 4, 7, 9, 10]),
         ]:
             assert_query_ids(self, client, collection_name, expr, expected_ids, pk_field=default_pk)

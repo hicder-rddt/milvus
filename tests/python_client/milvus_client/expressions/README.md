@@ -31,7 +31,7 @@ The newer modules do not replace those baselines. They add reviewable, determini
 - issue regressions and generalized mining cases;
 - meaningful negative-path error messages;
 - special scalar types such as TIMESTAMPTZ, text-enabled VARCHAR, and GEOMETRY;
-- materialized index assertions for scalar, JSON path, and StructArray sub-field indexes;
+- materialized index assertions for HNSW vector, scalar, JSON path, and StructArray sub-field indexes;
 - StructArray filtering, MATCH-family predicates, NULL/empty semantics, and query/search/delete API behavior;
 - compact mixed-expression stress cases without a cartesian explosion of collections.
 
@@ -46,15 +46,17 @@ The current suite covers:
 - special types: `TIMESTAMPTZ`, analyzer-enabled `VARCHAR`, `GEOMETRY`;
 - operators: comparison, `IN`, `NOT IN`, `LIKE`, arithmetic, bitwise `&`/`|`/`^`, logical `AND`/`OR`/`NOT`, `IS NULL`, `IS NOT NULL`;
 - functions: `array_contains*`, `array_length`, `json_contains*`, text/phrase match, geometry functions, StructArray `element_filter` and MATCH family, `RANDOM_SAMPLE`;
-- indexes: no-index plus materialized `INVERTED`, `BITMAP`, `TRIE`, `STL_SORT`, `NGRAM`, `RTREE`, JSON path cast indexes, and StructArray sub-field scalar indexes;
+- indexes: no-index plus materialized `HNSW`, `INVERTED`, `BITMAP`, `TRIE`, `STL_SORT`, `NGRAM`, `RTREE`, JSON path cast indexes, and StructArray sub-field scalar indexes;
 - segment modes: sealed, growing, and mixed where relevant;
-- API paths: query, search, hybrid search, and delete where relevant.
+- API paths: query, search, and delete, plus a dynamic-xfail hybrid-search regression for #51617.
+
+Focused fixtures that claim real index coverage insert and flush 3000 rows, wait until `indexed_rows >= 3000` with zero pending rows, and assert index identity and total row count. Plain/indexed twin fields reuse the same logical values so the index is the only semantic difference. The mixed-segment fixture separately proves 3000 sealed indexed rows plus visible growing rows before checking both query and HNSW search results.
 
 See [coverage_matrix.md](coverage_matrix.md) for the maintained per-node mapping.
 
 ## Running
 
-From `tests/python_client`:
+From `tests/python_client`, using an activated Python 3.12 virtual environment:
 
 ```bash
 python -m pytest milvus_client/expressions --collect-only -q
@@ -87,7 +89,7 @@ For remote validation, pass the standard Python client options, for example:
 
 ```bash
 python -m pytest -n 4 --dist loadgroup milvus_client/expressions/test_filtering_additional_l2.py \
-  --host 10.104.21.233 --port 19530 -q -s --tb=short --disable-warnings
+  --host 10.104.22.124 --port 19530 -q -s --tb=short --disable-warnings
 ```
 
 ## Maintenance Rules

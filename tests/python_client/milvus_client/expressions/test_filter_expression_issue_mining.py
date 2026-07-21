@@ -26,10 +26,10 @@ default_pk = "id"
 default_vec = "vector"
 default_dim = 8
 
-VECTOR_SEARCH_PARAMS = {"metric_type": "L2", "params": {}}
+VECTOR_SEARCH_PARAMS = {"metric_type": "L2", "params": {"ef": 64}}
 INT64_MAX = 2**63 - 1
 INT64_MIN = -(2**63)
-INT64_BOUNDARY_VALUES = [INT64_MAX - 1, 100, INT64_MIN, -1, 0, 1, INT64_MAX, INT64_MIN + 1]
+INT64_BOUNDARY_VALUES = [INT64_MAX - 1, 100, INT64_MIN, -1, 0, 1, INT64_MAX, INT64_MIN + 1, 20000]
 INT64_OVERFLOW_CASES = [
     (
         "addition",
@@ -67,7 +67,11 @@ INT64_OVERFLOW_KNOWN_DELTAS = {
 
 
 def vector_for_id(row_id):
-    return [float((row_id % 17) + 1) / 20.0] * default_dim
+    denominator = float(REAL_INDEX_ROW_COUNT + 101)
+    return [
+        float(((row_id + 1) * (dimension + 3)) % (REAL_INDEX_ROW_COUNT + 97) + 1) / denominator
+        for dimension in range(default_dim)
+    ]
 
 
 def hit_id(hit):
@@ -81,6 +85,14 @@ def hit_id(hit):
 
 def sorted_hit_ids(hits):
     return sorted(hit_id(hit) for hit in hits)
+
+
+def assert_search_shape(result, descending=False):
+    assert len(result) == 1, f"expected one nq result group, got {len(result)}"
+    hits = result[0]
+    distances = [hit["distance"] for hit in hits]
+    assert distances == sorted(distances, reverse=descending), f"unexpected distance order: {distances}"
+    return hits
 
 
 def assert_exact_ids(actual_ids, expected_ids, context):
@@ -135,7 +147,7 @@ def query_template_ids_or_xfail(client, collection_name, expr, filter_params, ex
 
 def search_template_ids_or_xfail(client, collection_name, expr, filter_params, expected_ids, context):
     try:
-        hits = client.search(
+        result = client.search(
             collection_name,
             data=[vector_for_id(2)],
             anns_field=default_vec,
@@ -144,12 +156,13 @@ def search_template_ids_or_xfail(client, collection_name, expr, filter_params, e
             filter_params=filter_params,
             output_fields=[default_pk],
             limit=10,
-        )[0]
+        )
     except MilvusException as exc:
         if is_empty_template_error(exc):
             pytest.xfail(f"Known issue https://github.com/milvus-io/milvus/issues/51617: {context} failed with {exc}")
         raise
 
+    hits = assert_search_shape(result)
     actual_ids = sorted_hit_ids(hits)
     assert_exact_ids(actual_ids, expected_ids, context)
     return actual_ids
@@ -157,18 +170,19 @@ def search_template_ids_or_xfail(client, collection_name, expr, filter_params, e
 
 def hybrid_template_ids_or_xfail(client, collection_name, request, expected_ids, context):
     try:
-        hits = client.hybrid_search(
+        result = client.hybrid_search(
             collection_name,
             [request],
             ranker=WeightedRanker(1.0),
             limit=10,
             output_fields=[default_pk],
-        )[0]
+        )
     except MilvusException as exc:
         if is_empty_template_error(exc):
             pytest.xfail(f"Known issue https://github.com/milvus-io/milvus/issues/51617: {context} failed with {exc}")
         raise
 
+    hits = assert_search_shape(result, descending=True)
     actual_ids = sorted_hit_ids(hits)
     assert_exact_ids(actual_ids, expected_ids, context)
     return actual_ids
@@ -202,15 +216,20 @@ def query_int64_ids_or_xfail(client, collection_name, expr, expected_ids, case_n
 
 
 def search_int64_ids_or_xfail(client, collection_name, expr, expected_ids, case_name, context):
-    hits = client.search(
+    result = client.search(
         collection_name,
         data=[vector_for_id(0)],
         anns_field=default_vec,
-        search_params={"metric_type": "L2", "params": {}, "hints": "iterative_filter"},
+        search_params={
+            "metric_type": "L2",
+            "params": {"ef": REAL_INDEX_ROW_COUNT},
+            "hints": "iterative_filter",
+        },
         filter=expr,
         output_fields=[default_pk],
         limit=REAL_INDEX_ROW_COUNT,
-    )[0]
+    )
+    hits = assert_search_shape(result)
     actual_ids = sorted_hit_ids(hits)
     missing, extra = ids_delta(actual_ids, expected_ids)
     known_missing, known_extra = INT64_OVERFLOW_KNOWN_DELTAS[case_name]
@@ -225,6 +244,7 @@ def search_int64_ids_or_xfail(client, collection_name, expr, expected_ids, case_
 @pytest.mark.xdist_group("TestEmptyListTemplateIssueRegressions")
 class TestEmptyListTemplateIssueRegressions(TestMilvusClientV2Base):
     shared_alias = "TestEmptyListTemplateIssueRegressions"
+    vector_index_name = "idx_empty_template_vector_hnsw"
 
     def create_template_collection(
         self,
@@ -252,11 +272,36 @@ class TestEmptyListTemplateIssueRegressions(TestMilvusClientV2Base):
             {default_pk: 1, "tags": [], "meta": {"tags": []}, default_vec: vector_for_id(1)},
             {default_pk: 2, "tags": ["blue"], "meta": {"tags": ["blue"]}, default_vec: vector_for_id(2)},
         ]
+        rows.extend(
+            {
+                default_pk: row_id,
+                "tags": ["filler"],
+                "meta": {"tags": ["filler"]},
+                default_vec: vector_for_id(row_id),
+            }
+            for row_id in range(3, REAL_INDEX_ROW_COUNT + 1)
+        )
         self.insert(client, collection_name, data=rows)
         self.flush(client, collection_name)
         index_params = self.prepare_index_params(client)[0]
-        index_params.add_index(default_vec, index_type="FLAT", metric_type="L2")
+        index_params.add_index(
+            default_vec,
+            index_name=self.vector_index_name,
+            index_type="HNSW",
+            metric_type="L2",
+            params={"M": 8, "efConstruction": 64},
+        )
         self.create_index(client, collection_name, index_params=index_params)
+        vector_index_info = wait_for_materialized_index(
+            self,
+            client,
+            collection_name,
+            self.vector_index_name,
+            expected_indexed_rows=REAL_INDEX_ROW_COUNT,
+        )
+        assert vector_index_info["index_name"] == self.vector_index_name
+        assert vector_index_info["field_name"] == default_vec
+        assert vector_index_info["total_rows"] == REAL_INDEX_ROW_COUNT
         self.load_collection(client, collection_name)
         return rows
 
@@ -306,8 +351,8 @@ class TestEmptyListTemplateIssueRegressions(TestMilvusClientV2Base):
     @pytest.mark.tags(CaseLabel.L0)
     def test_empty_list_template_search_matches_inline_51617(self, template_collection):
         client = self._client(alias=self.shared_alias)
-        inline_expr = "array_contains_all(tags, [])"
-        template_expr = "array_contains_all(tags, {values})"
+        inline_expr = "id <= 2 and array_contains_all(tags, [])"
+        template_expr = "id <= 2 and array_contains_all(tags, {values})"
         inline_hits = client.search(
             template_collection,
             data=[vector_for_id(2)],
@@ -336,14 +381,14 @@ class TestEmptyListTemplateIssueRegressions(TestMilvusClientV2Base):
             anns_field=default_vec,
             param=VECTOR_SEARCH_PARAMS,
             limit=10,
-            expr='json_contains_any(meta["tags"], [])',
+            expr='id <= 2 and json_contains_any(meta["tags"], [])',
         )
         template_request = AnnSearchRequest(
             data=[vector_for_id(2)],
             anns_field=default_vec,
             param=VECTOR_SEARCH_PARAMS,
             limit=10,
-            expr='json_contains_any(meta["tags"], {values})',
+            expr='id <= 2 and json_contains_any(meta["tags"], {values})',
             expr_params={"values": []},
         )
         inline_hits = client.hybrid_search(
@@ -369,19 +414,21 @@ class TestEmptyListTemplateIssueRegressions(TestMilvusClientV2Base):
         collection_name = cf.gen_collection_name_by_testcase_name()
         self.create_template_collection(client, collection_name)
         try:
-            inline_result = client.delete(collection_name, filter="id in []")
+            inline_result = client.delete(collection_name, filter="id <= 2 and id in []")
             assert inline_result["delete_count"] == 0
             result = delete_template_or_xfail(
                 client,
                 collection_name,
-                "id in {values}",
+                "id <= 2 and id in {values}",
                 {"values": []},
                 0,
                 "scalar empty-list delete",
             )
             assert result["delete_count"] == 0
-            remaining = client.query(collection_name, filter="", output_fields=[default_pk])
+            remaining = client.query(collection_name, filter="id <= 2", output_fields=[default_pk])
             assert sorted(row[default_pk] for row in remaining) == [1, 2]
+            count = client.query(collection_name, filter="", output_fields=["count(*)"])
+            assert count[0]["count(*)"] == REAL_INDEX_ROW_COUNT
         finally:
             if client.has_collection(collection_name):
                 client.drop_collection(collection_name)
@@ -416,7 +463,7 @@ class TestEmptyListTemplateIssueRegressions(TestMilvusClientV2Base):
             data=[vector_for_id(2)],
             anns_field=default_vec,
             search_params=VECTOR_SEARCH_PARAMS,
-            filter="array_contains_any(tags, {values})",
+            filter="id <= 2 and array_contains_any(tags, {values})",
             filter_params={"values": ["blue"]},
             output_fields=[default_pk],
             limit=2,
@@ -512,6 +559,7 @@ class TestParserAndBitwiseIssueCoverage(TestMilvusClientV2Base):
 class TestInt64OverflowIssueMining(TestMilvusClientV2Base):
     shared_alias = "TestInt64OverflowIssueMining"
     index_name = "idx_i64_overflow_inverted"
+    vector_index_name = "idx_i64_overflow_vector_hnsw"
 
     @pytest.fixture(scope="class")
     def overflow_collection(self, request):
@@ -569,16 +617,25 @@ class TestInt64OverflowIssueMining(TestMilvusClientV2Base):
         self.insert(client, collection_name, data=rows)
         self.flush(client, collection_name)
         index_params = self.prepare_index_params(client)[0]
-        index_params.add_index(default_vec, index_type="FLAT", metric_type="L2")
+        index_params.add_index(
+            default_vec,
+            index_type="HNSW",
+            index_name=self.vector_index_name,
+            metric_type="L2",
+            params={"M": 8, "efConstruction": 64},
+        )
         index_params.add_index("i64_indexed", index_type="INVERTED", index_name=self.index_name)
         self.create_index(client, collection_name, index_params=index_params)
-        self.__class__.overflow_index_info = wait_for_materialized_index(
-            self,
-            client,
-            collection_name,
-            self.index_name,
-            expected_indexed_rows=REAL_INDEX_ROW_COUNT,
-        )
+        self.__class__.overflow_index_infos = {
+            index_name: wait_for_materialized_index(
+                self,
+                client,
+                collection_name,
+                index_name,
+                expected_indexed_rows=REAL_INDEX_ROW_COUNT,
+            )
+            for index_name in (self.vector_index_name, self.index_name)
+        }
         self.load_collection(client, collection_name)
         yield collection_name
 
@@ -627,8 +684,17 @@ class TestInt64OverflowIssueMining(TestMilvusClientV2Base):
 
     @pytest.mark.tags(CaseLabel.L1)
     def test_int64_overflow_index_is_materialized(self, overflow_collection):
-        assert self.overflow_index_info["indexed_rows"] >= REAL_INDEX_ROW_COUNT
-        assert self.overflow_index_info["pending_index_rows"] == 0
+        expected_fields = {
+            self.vector_index_name: default_vec,
+            self.index_name: "i64_indexed",
+        }
+        assert set(self.overflow_index_infos) == set(expected_fields)
+        for index_name, index_info in self.overflow_index_infos.items():
+            assert index_info["index_name"] == index_name
+            assert index_info["field_name"] == expected_fields[index_name]
+            assert index_info["total_rows"] == REAL_INDEX_ROW_COUNT
+            assert index_info["indexed_rows"] >= REAL_INDEX_ROW_COUNT
+            assert index_info["pending_index_rows"] == 0
 
     @pytest.mark.tags(CaseLabel.L2)
     @pytest.mark.parametrize(

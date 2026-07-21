@@ -1,4 +1,4 @@
-REAL_INDEX_ROW_COUNT = 2048
+REAL_INDEX_ROW_COUNT = 3000
 
 SEGMENT_MODES_ACTIVE = ["sealed", "growing", "mixed"]
 SEGMENT_MODES_PENDING = []
@@ -10,7 +10,7 @@ ORDER_SENSITIVE_EXPRESSIONS = [
     (
         "age > 10 and score <= 90",
         "score <= 90 and age > 10",
-        [2, 3, 4, 6, 7, 8, 9, 10],
+        [3, 4, 6, 7, 8, 9, 10, 11, 14],
     ),
     (
         'age > 10 and meta["group"] == "qa"',
@@ -20,12 +20,12 @@ ORDER_SENSITIVE_EXPRESSIONS = [
     (
         'tag == "ops" or active == true',
         'active == true or tag == "ops"',
-        [1, 2, 4, 5, 6],
+        [1, 2, 4, 5, 6, 14],
     ),
     (
         '(age > 10 and meta["rank"] in [1, 3]) or active == true',
         'active == true or (meta["rank"] in [1, 3] and age > 10)',
-        [1, 2, 3, 4],
+        [1, 2, 3, 4, 11, 13, 14],
     ),
 ]
 
@@ -41,21 +41,21 @@ EQUIVALENT_EXPRESSION_CASES = [
         "de_morgan_scalar_bool",
         "not (age <= 10 or active == false)",
         "age > 10 and active == true",
-        [2, 4],
+        [2, 4, 14],
     ),
     (
         "distributive_scalar_bool_string",
         '(age > 10 and active == true) or (age > 10 and tag == "ops")',
         'age > 10 and (active == true or tag == "ops")',
-        [2, 4, 5, 6],
+        [2, 4, 5, 6, 14],
     ),
 ]
 
 
 BOOLEAN_FANOUT_EXPRESSIONS_L1 = [
-    ("single_predicate", "age > 10", 1, [2, 3, 4, 5, 6, 7, 8, 9, 10]),
-    ("and_2", "age > 10 and score <= 90", 2, [2, 3, 4, 6, 7, 8, 9, 10]),
-    ("and_3", "age > 10 and score <= 90 and active == true", 3, [2, 4]),
+    ("single_predicate", "age > 10", 1, [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14]),
+    ("and_2", "age > 10 and score <= 90", 2, [3, 4, 6, 7, 8, 9, 10, 11, 14]),
+    ("and_3", "age > 10 and score <= 90 and active == true", 3, [4, 14]),
     (
         "and_5_cross_field",
         'age > 10 and score <= 90 and active == false and tag != "ops" and meta["rank"] >= 3',
@@ -66,7 +66,7 @@ BOOLEAN_FANOUT_EXPRESSIONS_L1 = [
         "mixed_and_or_depth_2",
         '(age > 10 and meta["rank"] in [1, 3]) or active == true',
         3,
-        [1, 2, 3, 4],
+        [1, 2, 3, 4, 11, 13, 14],
     ),
 ]
 
@@ -204,20 +204,30 @@ JSON_BOOL_MIXED_51567_CONTROL_CASES = [
 
 
 EMPTY_LIST_TEMPLATE_51617_CASES = [
-    ("scalar_in", "id in {values}", "id in []", []),
-    ("scalar_not_in", "id not in {values}", "id not in []", [1, 2]),
-    ("array_contains_any", "array_contains_any(tags, {values})", "array_contains_any(tags, [])", []),
-    ("array_contains_all", "array_contains_all(tags, {values})", "array_contains_all(tags, [])", [1, 2]),
+    ("scalar_in", "id <= 2 and id in {values}", "id <= 2 and id in []", []),
+    ("scalar_not_in", "id <= 2 and id not in {values}", "id <= 2 and id not in []", [1, 2]),
+    (
+        "array_contains_any",
+        "id <= 2 and array_contains_any(tags, {values})",
+        "id <= 2 and array_contains_any(tags, [])",
+        [],
+    ),
+    (
+        "array_contains_all",
+        "id <= 2 and array_contains_all(tags, {values})",
+        "id <= 2 and array_contains_all(tags, [])",
+        [1, 2],
+    ),
     (
         "json_contains_any",
-        'json_contains_any(meta["tags"], {values})',
-        'json_contains_any(meta["tags"], [])',
+        'id <= 2 and json_contains_any(meta["tags"], {values})',
+        'id <= 2 and json_contains_any(meta["tags"], [])',
         [],
     ),
     (
         "json_contains_all",
-        'json_contains_all(meta["tags"], {values})',
-        'json_contains_all(meta["tags"], [])',
+        'id <= 2 and json_contains_all(meta["tags"], {values})',
+        'id <= 2 and json_contains_all(meta["tags"], [])',
         [1, 2],
     ),
 ]
@@ -242,7 +252,7 @@ NUMERIC_SCALAR_FILTER_TEMPLATES = [
     ("eq_3", "{field} == 3", [3]),
     ("range_3_6", "{field} > 3 and {field} <= 6", [4, 5, 6]),
     ("in_odd", "{field} in [1, 3, 5]", [1, 3, 5]),
-    ("not_in_odd", "{field} not in [1, 3, 5]", [2, 4, 6, 7, 8, 9, 10]),
+    ("not_in_odd", "{field} not in [1, 3, 5]", [2, 4, 6, 7, 8, 9, 10, 11, 12]),
 ]
 SCALAR_FILTER_CASES = [
     (f"{field}_{case_name}", expr_template.format(field=field), expected_ids)
@@ -251,36 +261,50 @@ SCALAR_FILTER_CASES = [
 ]
 SCALAR_FILTER_CASES.extend(
     [
-        ("varchar_like_prefix", 'name like "user_%"', list(range(1, 11))),
+        ("varchar_like_prefix", 'name like "user_%"', list(range(1, 10))),
         ("varchar_in", 'name in ["user_1", "user_3"]', [1, 3]),
-        ("bool_true", "active == true", [2, 4, 6, 8, 10]),
+        ("bool_true", "active == true", [2, 4, 6, 8, 10, 11, 12]),
         ("bool_false", "active == false", [1, 3, 5, 7, 9]),
     ]
 )
 
+NUMERIC_DISTINCT_FILTER_CASES = [
+    ("int8_max", "i8 == 127", [11]),
+    ("int8_min", "i8 == -128", [12]),
+    ("int16_max", "i16 == 32767", [11]),
+    ("int32_min", "i32 == -2147483648", [12]),
+    ("int64_max", "i64 == 9223372036854775807", [11]),
+    ("float_fraction", "f > 127.4 and f < 127.6", [11]),
+    ("double_fraction", "d > 1000000000000.2 and d < 1000000000000.3", [11]),
+]
+
 UNARY_NOT_FILTER_CASES = [
     ("not_bool_true", "not (active == true)", [1, 3, 5, 7, 9]),
-    ("not_json_rank_ge_3", "not (meta['rank'] >= 3)", [1, 2]),
+    ("not_json_rank_ge_3", "not (meta['rank'] >= 3)", [1, 2, 11, 12]),
     ("not_nullable_bool_true", "not (nullable_bool == true)", [1, 3, 7, 9]),
 ]
 
 NULL_FILTER_CASES = [
-    ("nullable_i64_is_null", "nullable_i64 is null", [3, 7]),
-    ("nullable_i64_is_not_null", "nullable_i64 is not null", [1, 2, 4, 5, 6, 8, 9, 10]),
+    ("nullable_i64_is_null", "nullable_i64 is null", [3, 4, 7]),
+    ("nullable_i64_is_not_null", "nullable_i64 is not null", [1, 2, 5, 6, 8, 9, 10, 11, 12]),
     ("nullable_varchar_is_null", "nullable_varchar is null", [4, 8]),
-    ("nullable_varchar_is_not_null", "nullable_varchar is not null", [1, 2, 3, 5, 6, 7, 9, 10]),
+    ("nullable_varchar_is_not_null", "nullable_varchar is not null", [1, 2, 3, 5, 6, 7, 9, 10, 11, 12]),
     ("nullable_bool_is_null", "nullable_bool is null", [5]),
-    ("nullable_bool_is_not_null", "nullable_bool is not null", [1, 2, 3, 4, 6, 7, 8, 9, 10]),
+    ("nullable_bool_is_not_null", "nullable_bool is not null", [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12]),
     ("nullable_arr_i64_is_null", "nullable_arr_i64 is null", [6]),
-    ("nullable_arr_i64_is_not_null", "nullable_arr_i64 is not null", [1, 2, 3, 4, 5, 7, 8, 9, 10]),
+    ("nullable_arr_i64_is_not_null", "nullable_arr_i64 is not null", [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]),
     ("meta_nullable_is_null", "meta_nullable is null", [9]),
-    ("meta_nullable_is_not_null", "meta_nullable is not null", [1, 2, 3, 4, 5, 6, 7, 8, 10]),
+    ("meta_nullable_is_not_null", "meta_nullable is not null", [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]),
 ]
 
 JSON_KEY_NULL_FILTER_CASES = [
     ("json_present_null_is_null", 'meta["maybe_null"] is null', [2]),
-    ("json_present_null_is_not_null", 'meta["maybe_null"] is not null', [1, 3, 4, 5, 6, 7, 8, 9, 10]),
-    ("json_missing_key_is_null", 'meta["missing_key"] is null', list(range(1, 11))),
+    (
+        "json_present_null_is_not_null",
+        'meta["maybe_null"] is not null',
+        [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    ),
+    ("json_missing_key_is_null", 'meta["missing_key"] is null', list(range(1, 13))),
     ("json_missing_key_is_not_null", 'meta["missing_key"] is not null', []),
     ("json_missing_key_outer_not_eq", 'not (meta["missing_key"] == 1)', []),
 ]
@@ -290,7 +314,11 @@ UNKNOWN_BOOLEAN_COMPOSITION_CASES = [
     ("unknown_and_true", 'meta["missing_key"] == 1 and id in [1, 2]', []),
     ("not_unknown_or_true", 'not ((meta["missing_key"] == 1) or id == 1)', []),
     ("is_null_then_not_eq_unknown", 'meta["missing_key"] is null and not (meta["missing_key"] == 1)', []),
-    ("not_json_key_is_null", 'not (meta["maybe_null"] is null)', [1, 3, 4, 5, 6, 7, 8, 9, 10]),
+    (
+        "not_json_key_is_null",
+        'not (meta["maybe_null"] is null)',
+        [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    ),
 ]
 
 ARITHMETIC_EXTENDED_FILTER_CASES = [
@@ -298,6 +326,11 @@ ARITHMETIC_EXTENDED_FILTER_CASES = [
         "mod_div_pow_precedence_mix",
         "(i64 % 2 == 0 and i64 / 2 >= 2) or (2 ** 3 == 8 and i64 == 3)",
         [3, 4, 6, 8, 10],
+    ),
+    (
+        "constant_power_false_control",
+        "(2 ** 3 == 7 and i64 == 3) or i64 == 4",
+        [4],
     ),
 ]
 
@@ -308,7 +341,7 @@ BOOLEAN_COMBINATORIAL_STRESS_CASES = [
         'or (array_contains(arr_i64, 3) and meta["group"] == "qa")) '
         "and not (nullable_i64 is null)) "
         'or (meta["rank"] >= 9 and name like "user_%")',
-        [2, 4, 9, 10],
+        [2, 5, 9],
     ),
 ]
 
@@ -325,22 +358,31 @@ ARRAY_FILTER_CASES = [
 ]
 
 ARRAY_LENGTH_FILTER_CASES = [
-    ("arr_i64_length_3", "array_length(arr_i64) == 3", list(range(1, 11))),
+    ("arr_i64_length_3", "array_length(arr_i64) == 3", list(range(1, 10))),
     ("nullable_arr_i64_length_0", "array_length(nullable_arr_i64) == 0", [10]),
-    ("nullable_arr_i64_length_1", "array_length(nullable_arr_i64) == 1", [1, 2, 3, 4, 5, 7, 8, 9]),
+    (
+        "nullable_arr_i64_length_1",
+        "array_length(nullable_arr_i64) == 1",
+        [1, 2, 3, 4, 5, 7, 8, 9, 11, 12],
+    ),
 ]
 
 ARRAY_OTHER_TYPE_FILTER_CASES = [
     ("arr_float_contains_3_5", "array_contains(arr_float, 3.5)", [3]),
     ("arr_double_contains_any", "array_contains_any(arr_double, [2.25, 9.25])", [2, 9]),
-    ("arr_bool_contains_true", "array_contains(arr_bool, true)", [2, 4, 6, 8, 10]),
+    ("arr_bool_contains_true", "array_contains(arr_bool, true)", [2, 4, 6, 8, 10, 11, 12]),
     ("arr_bool_contains_false", "array_contains(arr_bool, false)", [1, 3, 5, 7, 9]),
 ]
 
 ARRAY_NULL_EMPTY_FILTER_CASES = [
     ("nullable_arr_i64_is_null", "nullable_arr_i64 is null", [6]),
-    ("nullable_arr_i64_is_not_null", "nullable_arr_i64 is not null", [1, 2, 3, 4, 5, 7, 8, 9, 10]),
-    ("nullable_arr_i64_empty_no_match", "array_contains(nullable_arr_i64, 10)", []),
+    ("nullable_arr_i64_is_not_null", "nullable_arr_i64 is not null", [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]),
+    ("nullable_arr_i64_positive_control", "array_contains(nullable_arr_i64, 5)", [5]),
+    (
+        "nullable_arr_i64_empty_not_contains",
+        "not array_contains(nullable_arr_i64, 10)",
+        [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12],
+    ),
 ]
 
 ORDER_ARRAY_FUNCTION_EXPRESSIONS = [
@@ -372,10 +414,20 @@ JSON_ARRAY_COMPOSITION_CASES = [
 ]
 
 NON_EMPTY_TEMPLATE_CONTROL_CASES = [
-    ("scalar_in", "id in {values}", {"values": [1]}, [1]),
-    ("scalar_not_in", "id not in {values}", {"values": [1]}, [2]),
-    ("array_contains_any", "array_contains_any(tags, {values})", {"values": ["blue"]}, [2]),
-    ("json_contains_any", 'json_contains_any(meta["tags"], {values})', {"values": ["blue"]}, [2]),
+    ("scalar_in", "id <= 2 and id in {values}", {"values": [1]}, [1]),
+    ("scalar_not_in", "id <= 2 and id not in {values}", {"values": [1]}, [2]),
+    (
+        "array_contains_any",
+        "id <= 2 and array_contains_any(tags, {values})",
+        {"values": ["blue"]},
+        [2],
+    ),
+    (
+        "json_contains_any",
+        'id <= 2 and json_contains_any(meta["tags"], {values})',
+        {"values": ["blue"]},
+        [2],
+    ),
 ]
 
 NEGATIVE_FILTER_ERROR_CASES = [
@@ -454,16 +506,16 @@ INDEX_CONSISTENCY_CASES = [
         "case_name": "int64_inverted_range",
         "field_type": "INT64",
         "index_type": "INVERTED",
-        "plain_expr": "i64_plain >= 3 and i64_plain <= 7",
-        "indexed_expr": "i64_indexed >= 3 and i64_indexed <= 7",
+        "plain_expr": "i64_plain >= 31 and i64_plain <= 71",
+        "indexed_expr": "i64_indexed >= 31 and i64_indexed <= 71",
         "expected_ids": [3, 4, 5, 6, 7],
     },
     {
         "case_name": "int64_bitmap_in",
         "field_type": "INT64",
         "index_type": "BITMAP",
-        "plain_expr": "i64_bitmap_plain in [2, 4, 6, 8]",
-        "indexed_expr": "i64_bitmap_indexed in [2, 4, 6, 8]",
+        "plain_expr": "i64_bitmap_plain in [10002, 10004, 10006, 10008]",
+        "indexed_expr": "i64_bitmap_indexed in [10002, 10004, 10006, 10008]",
         "expected_ids": [2, 4, 6, 8],
     },
     {
@@ -510,16 +562,16 @@ INDEX_CONSISTENCY_CASES = [
         "case_name": "bitset_boundary_63_65",
         "field_type": "INT64",
         "index_type": "INVERTED",
-        "plain_expr": "i64_plain in [63, 64, 65]",
-        "indexed_expr": "i64_indexed in [63, 64, 65]",
+        "plain_expr": "i64_plain in [631, 641, 651]",
+        "indexed_expr": "i64_indexed in [631, 641, 651]",
         "expected_ids": [63, 64, 65],
     },
     {
         "case_name": "row_id_boundary_1023_1025",
         "field_type": "INT64",
         "index_type": "INVERTED",
-        "plain_expr": "i64_plain in [1023, 1024, 1025]",
-        "indexed_expr": "i64_indexed in [1023, 1024, 1025]",
+        "plain_expr": "i64_plain in [10231, 10241, 10251]",
+        "indexed_expr": "i64_indexed in [10231, 10241, 10251]",
         "expected_ids": [1023, 1024, 1025],
     },
     {
@@ -586,11 +638,11 @@ def build_filter_matrix_rows(pk_field="id"):
                 "f": float(i),
                 "d": float(i),
                 "active": i % 2 == 0,
-                "nullable_i64": None if i in {3, 7} else i,
+                "nullable_i64": None if i in {3, 4, 7} else i,
                 "nullable_varchar": None if i in {4, 8} else f"nullable_{i}",
                 "nullable_bool": None if i == 5 else i % 2 == 0,
-                "name": f"user_{i}",
-                "arr_i64": [i - 2, i - 1, i],
+                "name": "system_10" if i == 10 else f"user_{i}",
+                "arr_i64": [10] if i == 10 else [i - 2, i - 1, i],
                 "arr_float": [float(i), float(i) + 0.5],
                 "arr_double": [float(i), float(i) + 0.25],
                 "arr_bool": [i % 2 == 0],
@@ -598,13 +650,61 @@ def build_filter_matrix_rows(pk_field="id"):
                 "nullable_arr_i64": None if i == 6 else ([] if i == 10 else [i]),
                 "meta": {
                     "rank": i,
-                    "group": group_by_id[i],
+                    "group": "qa" if i == 5 else group_by_id[i],
                     "labels": ["hot", "warm"] if i == 3 else (["hot"] if i in {1, 5} else ["cold"]),
                     "maybe_null": None if i == 2 else i,
                 },
                 "meta_nullable": None if i == 9 else {"rank": i},
             }
         )
+    rows.extend(
+        [
+            {
+                pk_field: 11,
+                "i8": 127,
+                "i16": 32767,
+                "i32": 2147483647,
+                "i64": 9223372036854775807,
+                "f": 127.5,
+                "d": 1000000000000.25,
+                "active": True,
+                "nullable_i64": 11,
+                "nullable_varchar": "nullable_11",
+                "nullable_bool": True,
+                "name": "control_11",
+                "arr_i64": [100],
+                "arr_float": [100.5],
+                "arr_double": [100.25],
+                "arr_bool": [True],
+                "arr_varchar": ["control"],
+                "nullable_arr_i64": [100],
+                "meta": {"rank": 0, "group": "control", "labels": ["cold"], "maybe_null": 11},
+                "meta_nullable": {"rank": 0},
+            },
+            {
+                pk_field: 12,
+                "i8": -128,
+                "i16": -32768,
+                "i32": -2147483648,
+                "i64": -9223372036854775808,
+                "f": -127.5,
+                "d": -1000000000000.25,
+                "active": True,
+                "nullable_i64": 12,
+                "nullable_varchar": "nullable_12",
+                "nullable_bool": True,
+                "name": "control_12",
+                "arr_i64": [-100],
+                "arr_float": [-100.5],
+                "arr_double": [-100.25],
+                "arr_bool": [True],
+                "arr_varchar": ["control"],
+                "nullable_arr_i64": [-100],
+                "meta": {"rank": 0, "group": "control", "labels": ["cold"], "maybe_null": 12},
+                "meta_nullable": {"rank": 0},
+            },
+        ]
+    )
     return rows
 
 
@@ -615,6 +715,11 @@ def build_timestamptz_rows(pk_field="id", use_dual_fields=False, row_count=5):
         3: "2025-01-01T12:30:00Z",
         4: "2025-01-02T00:00:00Z",
         5: None,
+        1023: "2025-01-01T00:00:00Z",
+        1024: "2025-01-01T12:30:00Z",
+        2047: None,
+        2999: "2025-01-02T00:00:00Z",
+        3000: "2030-01-01T00:00:00Z",
     }
     rows = []
     for pk in range(1, row_count + 1):
@@ -630,18 +735,20 @@ def build_timestamptz_rows(pk_field="id", use_dual_fields=False, row_count=5):
 
 
 TIMESTAMPTZ_FILTER_CASES = [
-    ("id <= 5 and event_time_plain == ISO '2025-01-01T00:00:00Z'", [1, 2]),
+    ("event_time_plain == ISO '2025-01-01T00:00:00Z'", [1, 2, 1023]),
     (
-        "id <= 5 and event_time_plain >= ISO '2025-01-01T00:00:00Z' and event_time_plain < ISO '2025-01-02T00:00:00Z'",
-        [1, 2, 3],
+        "event_time_plain >= ISO '2025-01-01T00:00:00Z' and event_time_plain < ISO '2025-01-02T00:00:00Z'",
+        [1, 2, 3, 1023, 1024],
     ),
     (
-        "id <= 5 and (event_time_plain == ISO '2025-01-01T00:00:00Z' "
-        "or event_time_plain == ISO '2025-01-02T00:00:00Z')",
-        [1, 2, 4],
+        "(event_time_plain == ISO '2025-01-01T00:00:00Z' or event_time_plain == ISO '2025-01-02T00:00:00Z')",
+        [1, 2, 4, 1023, 2999],
     ),
-    ("id <= 5 and event_time_plain is null", [5]),
-    ("id <= 5 and event_time_plain is not null", [1, 2, 3, 4]),
+    ("id in [5, 2047] and event_time_plain is null", [5, 2047]),
+    (
+        "id in [1, 2, 3, 4, 1023, 1024, 2999, 3000] and event_time_plain is not null",
+        [1, 2, 3, 4, 1023, 1024, 2999, 3000],
+    ),
 ]
 
 
@@ -686,36 +793,33 @@ TIMESTAMPTZ_INTERVAL_51538_CASES = [
 TIMESTAMPTZ_INDEX_CONSISTENCY_CASES = [
     (
         "eq_utc",
-        "id <= 5 and event_time_plain == ISO '2025-01-01T00:00:00Z'",
-        "id <= 5 and event_time_indexed == ISO '2025-01-01T00:00:00Z'",
-        [1, 2],
+        "event_time_plain == ISO '2025-01-01T00:00:00Z'",
+        "event_time_indexed == ISO '2025-01-01T00:00:00Z'",
+        [1, 2, 1023],
     ),
     (
         "range_same_day",
-        "id <= 5 and event_time_plain >= ISO '2025-01-01T00:00:00Z' and event_time_plain < ISO '2025-01-02T00:00:00Z'",
-        "id <= 5 and event_time_indexed >= ISO '2025-01-01T00:00:00Z' "
-        "and event_time_indexed < ISO '2025-01-02T00:00:00Z'",
-        [1, 2, 3],
+        "event_time_plain >= ISO '2025-01-01T00:00:00Z' and event_time_plain < ISO '2025-01-02T00:00:00Z'",
+        "event_time_indexed >= ISO '2025-01-01T00:00:00Z' and event_time_indexed < ISO '2025-01-02T00:00:00Z'",
+        [1, 2, 3, 1023, 1024],
     ),
     (
         "or_two_instants",
-        "id <= 5 and (event_time_plain == ISO '2025-01-01T00:00:00Z' "
-        "or event_time_plain == ISO '2025-01-02T00:00:00Z')",
-        "id <= 5 and (event_time_indexed == ISO '2025-01-01T00:00:00Z' "
-        "or event_time_indexed == ISO '2025-01-02T00:00:00Z')",
-        [1, 2, 4],
+        "(event_time_plain == ISO '2025-01-01T00:00:00Z' or event_time_plain == ISO '2025-01-02T00:00:00Z')",
+        "(event_time_indexed == ISO '2025-01-01T00:00:00Z' or event_time_indexed == ISO '2025-01-02T00:00:00Z')",
+        [1, 2, 4, 1023, 2999],
     ),
     (
         "is_null",
-        "id <= 5 and event_time_plain is null",
-        "id <= 5 and event_time_indexed is null",
-        [5],
+        "id in [5, 2047] and event_time_plain is null",
+        "id in [5, 2047] and event_time_indexed is null",
+        [5, 2047],
     ),
     (
         "is_not_null",
-        "id <= 5 and event_time_plain is not null",
-        "id <= 5 and event_time_indexed is not null",
-        [1, 2, 3, 4],
+        "id in [1, 2, 3, 4, 1023, 1024, 2999, 3000] and event_time_plain is not null",
+        "id in [1, 2, 3, 4, 1023, 1024, 2999, 3000] and event_time_indexed is not null",
+        [1, 2, 3, 4, 1023, 1024, 2999, 3000],
     ),
 ]
 
@@ -725,13 +829,16 @@ TEXT_ROWS = [
     {"id": 3, "content": "cloud infra observability", "topic": "infra"},
     {"id": 4, "content": "vector search ranking", "topic": "search"},
     {"id": 5, "content": "database backup infra", "topic": "infra"},
+    {"id": 6, "content": "database vector migration", "topic": "other"},
+    {"id": 7, "content": "database operations handbook", "topic": "other"},
+    {"id": 8, "content": "vector storage handbook", "topic": "db"},
 ]
 
 TEXT_FILTER_CASES = [
-    ("text_match(content, 'database')", [1, 2, 5]),
+    ("text_match(content, 'database')", [1, 2, 5, 6, 7]),
     ("phrase_match(content, 'vector database', 0)", [1]),
     ("text_match(content, 'database') and topic == 'db'", [1, 2]),
-    ("text_match(content, 'database') or topic == 'infra'", [1, 2, 3, 5]),
+    ("text_match(content, 'database') or topic == 'infra'", [1, 2, 3, 5, 6, 7]),
 ]
 
 QUERY_POLYGON_ALL = "POLYGON ((-10 -10, 110 -10, 110 110, -10 110, -10 -10))"
@@ -752,13 +859,44 @@ GEOMETRY_ROWS = [
         "geo_plain": "POLYGON ((60 60, 90 60, 90 90, 60 90, 60 60))",
         "geo_indexed": "POLYGON ((60 60, 90 60, 90 90, 60 90, 60 60))",
     },
+    {
+        "id": 6,
+        "geo_plain": "POLYGON ((40 40, 60 40, 60 60, 40 60, 40 40))",
+        "geo_indexed": "POLYGON ((40 40, 60 40, 60 60, 40 60, 40 40))",
+    },
+    {"id": 7, "geo_plain": "POINT (10.000001 10)", "geo_indexed": "POINT (10.000001 10)"},
 ]
 
 
 def build_geometry_rows(row_count=5):
-    rows = list(GEOMETRY_ROWS)
-    for i in range(6, row_count + 1):
-        point = f"POINT ({1000 + i} {1000 + i})"
+    special_rows = {row["id"]: row for row in GEOMETRY_ROWS}
+    special_rows.update(
+        {
+            1023: {"id": 1023, "geo_plain": "POINT (10 10)", "geo_indexed": "POINT (10 10)"},
+            1024: {
+                "id": 1024,
+                "geo_plain": "POLYGON ((40 40, 60 40, 60 60, 40 60, 40 40))",
+                "geo_indexed": "POLYGON ((40 40, 60 40, 60 60, 40 60, 40 40))",
+            },
+            2047: {
+                "id": 2047,
+                "geo_plain": "POINT (10.000001 10)",
+                "geo_indexed": "POINT (10.000001 10)",
+            },
+            2999: {
+                "id": 2999,
+                "geo_plain": "POLYGON ((0 0, 20 0, 20 20, 0 20, 0 0))",
+                "geo_indexed": "POLYGON ((0 0, 20 0, 20 20, 0 20, 0 0))",
+            },
+        }
+    )
+    rows = []
+    for i in range(1, row_count + 1):
+        if i in special_rows:
+            rows.append(special_rows[i])
+            continue
+        offset = (i % 10) * 0.001
+        point = f"POINT ({-80.0 + offset} {-80.0 + offset})"
         rows.append({"id": i, "geo_plain": point, "geo_indexed": point})
     return rows
 
@@ -768,36 +906,36 @@ GEOMETRY_INDEX_CONSISTENCY_CASES = [
         "within_all",
         f"ST_WITHIN(geo_plain, '{QUERY_POLYGON_ALL}')",
         f"ST_WITHIN(geo_indexed, '{QUERY_POLYGON_ALL}')",
-        [1, 2, 3, 4, 5],
+        [1, 2, 3, 4, 5, 6, 7, 1023, 1024, 2047, 2999],
     ),
     (
         "within_partial",
         f"ST_WITHIN(geo_plain, '{QUERY_POLYGON_PARTIAL}')",
         f"ST_WITHIN(geo_indexed, '{QUERY_POLYGON_PARTIAL}')",
-        [1, 2, 4],
+        [1, 2, 4, 7, 1023, 2047, 2999],
     ),
     (
         "intersects_partial",
         f"ST_INTERSECTS(geo_plain, '{QUERY_POLYGON_PARTIAL}')",
         f"ST_INTERSECTS(geo_indexed, '{QUERY_POLYGON_PARTIAL}')",
-        [1, 2, 4],
+        [1, 2, 4, 6, 7, 1023, 1024, 2047, 2999],
     ),
     (
         "contains_point",
         f"ST_CONTAINS(geo_plain, '{QUERY_POINT_INSIDE_FIRST_POLYGON}')",
         f"ST_CONTAINS(geo_indexed, '{QUERY_POINT_INSIDE_FIRST_POLYGON}')",
-        [4],
+        [4, 2999],
     ),
     (
         "equals_point",
         "ST_EQUALS(geo_plain, 'POINT (10 10)')",
         "ST_EQUALS(geo_indexed, 'POINT (10 10)')",
-        [1],
+        [1, 1023],
     ),
     (
         "dwithin_point_one_meter",
-        "id <= 5 and ST_DWITHIN(geo_plain, 'POINT (10 10)', 1)",
-        "id <= 5 and ST_DWITHIN(geo_indexed, 'POINT (10 10)', 1)",
-        [1, 4],
+        "ST_DWITHIN(geo_plain, 'POINT (10 10)', 1)",
+        "ST_DWITHIN(geo_indexed, 'POINT (10 10)', 1)",
+        [1, 4, 7, 1023, 2047, 2999],
     ),
 ]
