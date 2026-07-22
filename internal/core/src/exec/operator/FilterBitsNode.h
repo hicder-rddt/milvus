@@ -34,6 +34,9 @@ ConvertPredicateToFilteredBitset(TargetBitmapView data,
                                  TargetBitmapView valid,
                                  size_t size);
 
+bool
+ConvertPredicateToFilteredBitset(RoaringBitmapVector& bitmap);
+
 class PhyFilterBitsNode : public Operator {
  public:
     PhyFilterBitsNode(

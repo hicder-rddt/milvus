@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <optional>
 #include <ratio>
 #include <utility>
 #include <vector>
@@ -116,6 +117,7 @@ PhyVectorSearchNode::GetOutput() {
     //            (IDSelectorAll in Knowhere, skips per-vector bit test).
     // Normal path: build BitsetView from the bitmap produced upstream.
     milvus::BitsetView search_view;
+    std::optional<milvus::FrozenRoaringBitsetView> frozen_roaring_view;
     int64_t data_cnt = active_count_;
 
     if (!ph.element_level_ && query_context_->bitset_is_element_level()) {
@@ -159,10 +161,9 @@ PhyVectorSearchNode::GetOutput() {
             query_context_->set_bitset_is_element_level(true);
         }
 
-        auto col_input = GetColumnVector(input_);
-        TargetBitmapView view(col_input->GetRawData(), col_input->size());
-
-        if (view.all()) {
+        auto roaring_input = GetRoaringBitmapVector(input_);
+        if (roaring_input != nullptr &&
+            roaring_input->count() == roaring_input->size()) {
             auto search_result = empty_search_result(num_queries);
             search_result.total_data_cnt_ = data_cnt;
             search_result.element_level_ = ph.element_level_;
@@ -170,10 +171,25 @@ PhyVectorSearchNode::GetOutput() {
             return input_;
         }
 
-        // TODO: uniform knowhere BitsetView and milvus BitsetView
-        search_view = milvus::BitsetView((uint8_t*)col_input->GetRawData(),
-                                         col_input->size());
-        data_cnt = search_view.size();
+        if (roaring_input != nullptr) {
+            frozen_roaring_view.emplace(*roaring_input);
+            search_view = frozen_roaring_view->view();
+            data_cnt = roaring_input->size();
+        } else {
+            auto col_input = GetColumnVector(input_);
+            TargetBitmapView view(col_input->GetRawData(), col_input->size());
+            if (view.all()) {
+                auto search_result = empty_search_result(num_queries);
+                search_result.total_data_cnt_ = data_cnt;
+                search_result.element_level_ = ph.element_level_;
+                query_context_->set_search_result(std::move(search_result));
+                return input_;
+            }
+
+            search_view = milvus::BitsetView((uint8_t*)col_input->GetRawData(),
+                                             col_input->size());
+            data_cnt = search_view.size();
+        }
     }
 
     // Single search + metrics path

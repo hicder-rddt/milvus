@@ -178,14 +178,34 @@ PhyConjunctFilterExpr::Eval(EvalCtx& context, VectorPtr& result) {
             has_result = true;
             all_flat_result = GetColumnVector(result);
         } else {
-            auto input_flat_result = GetColumnVector(input_result);
-            all_flat_result = GetColumnVector(result);
-            if (is_and_) {
-                common::ThreeValuedLogicOp::And(all_flat_result,
-                                                input_flat_result);
+            auto result_roaring = GetRoaringBitmapVector(result);
+            auto input_roaring = GetRoaringBitmapVector(input_result);
+            if (result_roaring != nullptr || input_roaring != nullptr) {
+                if (result_roaring == nullptr) {
+                    result_roaring = RoaringBitmapVector::FromColumnVector(
+                        GetColumnVector(result));
+                }
+                if (input_roaring == nullptr) {
+                    input_roaring = RoaringBitmapVector::FromColumnVector(
+                        GetColumnVector(input_result));
+                }
+                if (is_and_) {
+                    result_roaring->And(*input_roaring);
+                } else {
+                    result_roaring->Or(*input_roaring);
+                }
+                result = result_roaring;
+                all_flat_result = result_roaring->ToColumnVector();
             } else {
-                common::ThreeValuedLogicOp::Or(all_flat_result,
-                                               input_flat_result);
+                auto input_flat_result = GetColumnVector(input_result);
+                all_flat_result = GetColumnVector(result);
+                if (is_and_) {
+                    common::ThreeValuedLogicOp::And(all_flat_result,
+                                                    input_flat_result);
+                } else {
+                    common::ThreeValuedLogicOp::Or(all_flat_result,
+                                                   input_flat_result);
+                }
             }
         }
 

@@ -75,10 +75,13 @@ class StringIndexMarisa : public StringIndex {
     Build(const Config& config = {}) override;
 
     void
-    BuildWithFieldData(const std::vector<FieldDataPtr>& field_datas) override;
+    BuildWithFieldData(const std::vector<FieldDataPtr>& field_data) override;
 
     const TargetBitmap
     In(size_t n, const std::string* values) override;
+
+    RoaringBitmapVectorPtr
+    InRoaring(size_t n, const std::string* values) override;
 
     const TargetBitmap
     NotIn(size_t n, const std::string* values) override;

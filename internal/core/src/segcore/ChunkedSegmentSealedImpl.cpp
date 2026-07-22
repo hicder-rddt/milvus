@@ -3487,6 +3487,13 @@ ChunkedSegmentSealedImpl::mask_with_delete(BitsetTypeView& bitset,
 }
 
 void
+ChunkedSegmentSealedImpl::mask_with_delete(RoaringBitmapVector& bitset,
+                                           int64_t ins_barrier,
+                                           Timestamp timestamp) const {
+    deleted_record_.Query(bitset, ins_barrier, timestamp);
+}
+
+void
 ChunkedSegmentSealedImpl::vector_search(SearchInfo& search_info,
                                         const void* query_data,
                                         const size_t* query_offsets,
@@ -6490,6 +6497,55 @@ ChunkedSegmentSealedImpl::mask_with_timestamps(BitsetTypeView& bitset_chunk,
         mask[i] = val > timestamp;
     });
     bitset_chunk |= mask;
+}
+
+void
+ChunkedSegmentSealedImpl::mask_with_timestamps(
+    RoaringBitmapVector& bitset_chunk,
+    Timestamp timestamp,
+    Timestamp collection_ttl) const {
+    auto snapshot = CapturePublishedState();
+    if (snapshot->schema->is_external_collection()) {
+        return;
+    }
+    auto runtime = snapshot->runtime;
+    AssertInfo(runtime != nullptr && runtime->timestamp_index != nullptr,
+               "timestamp index is not ready");
+    auto& ts_index_data = *runtime->timestamp_index;
+    auto effective_commit_ts =
+        snapshot->commit_ts != 0 ? std::optional<Timestamp>{snapshot->commit_ts}
+                                 : std::nullopt;
+    const auto total_size = runtime->row_count;
+
+    if (collection_ttl > 0) {
+        auto range = ts_index_data.get_active_range(collection_ttl);
+        if (range.first == range.second && range.first == total_size) {
+            bitset_chunk.SetAll();
+            return;
+        }
+        bitset_chunk.AddRange(0, range.first);
+        for (int64_t i = range.first; i < range.second; ++i) {
+            if (ReadTimestamp(i, runtime, effective_commit_ts) <=
+                collection_ttl) {
+                bitset_chunk.Add(i);
+            }
+        }
+    }
+
+    auto range = ts_index_data.get_active_range(timestamp);
+    if (range.first == range.second && range.first == total_size) {
+        return;
+    }
+    if (range.first == range.second && range.first == 0) {
+        bitset_chunk.SetAll();
+        return;
+    }
+    bitset_chunk.AddRange(range.second, total_size);
+    for (int64_t i = range.first; i < range.second; ++i) {
+        if (ReadTimestamp(i, runtime, effective_commit_ts) > timestamp) {
+            bitset_chunk.Add(i);
+        }
+    }
 }
 
 std::string

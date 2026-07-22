@@ -1235,6 +1235,27 @@ TEST_F(JsonFlatIndexExprTest, TestUnaryExpr) {
     EXPECT_TRUE(final[12]);
 }
 
+TEST_F(JsonFlatIndexExprTest, TestBinaryRangeExpr) {
+    proto::plan::GenericValue lower;
+    lower.set_int64_val(1);
+    proto::plan::GenericValue upper;
+    upper.set_int64_val(3);
+    auto expr = std::make_shared<expr::BinaryRangeFilterExpr>(
+        expr::ColumnInfo(json_fid_, DataType::JSON, {"a"}),
+        lower,
+        upper,
+        true,
+        true);
+    auto plan =
+        std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID, expr);
+    auto final = query::ExecuteQueryExpr(
+        plan, segment_.get(), json_data_.size(), MAX_TIMESTAMP);
+    EXPECT_EQ(final.count(), 3);
+    EXPECT_TRUE(final[0]);
+    EXPECT_TRUE(final[2]);
+    EXPECT_TRUE(final[13]);
+}
+
 TEST_F(JsonFlatIndexExprTest, TestComparisonUnknowns) {
     proto::plan::GenericValue value;
     value.set_int64_val(1);

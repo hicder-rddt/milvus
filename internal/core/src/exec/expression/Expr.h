@@ -30,6 +30,7 @@
 #include "common/FieldDataInterface.h"
 #include "common/Json.h"
 #include "common/OpContext.h"
+#include "common/RoaringBitmapVector.h"
 #include "common/Types.h"
 #include "exec/expression/EvalCtx.h"
 #include "exec/expression/ExprCacheHelper.h"
@@ -686,8 +687,8 @@ class SegmentExpr : public Expr {
                                 OffsetVector* input,
                                 const ValTypes&... values) {
         AssertInfo(num_index_chunk_ == 1, "scalar index chunk num must be 1");
-        using IndexInnerType = std::
-            conditional_t<std::is_same_v<T, std::string_view>, std::string, T>;
+        using IndexInnerType = std::conditional_t<
+            std::is_same_v<T, std::string_view>, std::string, T>;
         using Index = index::ScalarIndex<IndexInnerType>;
         TargetBitmap valid_res(input->size());
 
@@ -1762,6 +1763,91 @@ class SegmentExpr : public Expr {
             func, false, IndexValidityMode::Default, values...);
     }
 
+    template <typename T, typename FUNC, typename... ValTypes>
+    VectorPtr
+    ProcessIndexChunksRoaring(FUNC func,
+                              bool element_level,
+                              const ValTypes&... values) {
+        using IndexInnerType = std::
+            conditional_t<std::is_same_v<T, std::string_view>, std::string, T>;
+        using Index = index::ScalarIndex<IndexInnerType>;
+
+        AssertInfo(num_index_chunk_ == 1,
+                   "scalar index should have exactly 1 chunk, got {}",
+                   num_index_chunk_);
+        if (cached_index_chunk_id_ != 0) {
+            Index* index_ptr = nullptr;
+            std::shared_ptr<index::JsonFlatIndexQueryExecutor<IndexInnerType>>
+                executor;
+            if (field_type_ == DataType::JSON) {
+                auto json_flat_index =
+                    dynamic_cast<const index::JsonFlatIndex*>(
+                        pinned_index_[0].get());
+                if (json_flat_index != nullptr) {
+                    const auto json_pointer =
+                        milvus::Json::pointer(nested_path_);
+                    const auto index_path = json_flat_index->GetNestedPath();
+                    executor = json_flat_index
+                                   ->template create_executor<IndexInnerType>(
+                                       json_pointer.substr(index_path.size()));
+                    index_ptr = executor.get();
+                }
+            }
+            if (index_ptr == nullptr) {
+                auto scalar_index =
+                    dynamic_cast<const Index*>(pinned_index_[0].get());
+                index_ptr = const_cast<Index*>(scalar_index);
+            }
+            AssertInfo(index_ptr != nullptr,
+                       "failed to cast scalar index for roaring query");
+            cached_is_nested_index_ = index_ptr->IsNestedIndex();
+            if (ExprResCacheManager::IsEnabled()) {
+                auto cached = ExprCacheHelper::GetOrCompute(
+                    segment_,
+                    this->ToString(),
+                    active_count_,
+                    [&]() -> ExprCacheHelper::ComputeResult {
+                        auto roaring = func(index_ptr, values...);
+                        TargetBitmap valid;
+                        roaring->AppendValidValuesTo(
+                            valid, 0, roaring->size());
+                        return {roaring->ToTargetBitmap(), std::move(valid)};
+                    });
+                cached_index_chunk_roaring_res_ =
+                    std::make_shared<RoaringBitmapVector>(
+                        cached.result->clone(), cached.valid->clone());
+            } else {
+                cached_index_chunk_roaring_res_ = func(index_ptr, values...);
+            }
+            cached_index_chunk_id_ = 0;
+        }
+
+        const auto data_pos = current_index_chunk_pos_;
+        if (cached_is_nested_index_ || element_level) {
+            auto array_offsets = segment_->GetArrayOffsets(field_id_);
+            AssertInfo(array_offsets != nullptr,
+                       "array offsets are required for nested scalar index");
+            const auto batch_rows =
+                std::min(batch_size_, active_count_ - data_pos);
+            const auto elem_start =
+                array_offsets->ElementIDRangeOfRow(data_pos).first;
+            const auto elem_end = array_offsets
+                                      ->ElementIDRangeOfRow(data_pos + batch_rows)
+                                      .first;
+            current_index_chunk_pos_ = data_pos + batch_rows;
+            return cached_index_chunk_roaring_res_->Slice(
+                elem_start, elem_end - elem_start);
+        }
+
+        const auto size = std::min(
+            {int64_t(batch_size_),
+             int64_t(cached_index_chunk_roaring_res_->size()) - data_pos,
+             active_count_ - data_pos});
+        auto result = cached_index_chunk_roaring_res_->Slice(data_pos, size);
+        current_index_chunk_pos_ = data_pos + size;
+        return result;
+    }
+
     // ProcessIndexChunks with func_returns_row_level flag
     // func_returns_row_level: if true, func returns row-level bitset even for nested index
     //   (used when func already handles element-to-row conversion internally)
@@ -2633,6 +2719,7 @@ class SegmentExpr : public Expr {
     // Legacy cache fields — TODO: remove after all subclasses migrated to cached_result_.
     int64_t cached_index_chunk_id_{-1};
     std::shared_ptr<TargetBitmap> cached_index_chunk_res_{nullptr};
+    RoaringBitmapVectorPtr cached_index_chunk_roaring_res_{nullptr};
     std::shared_ptr<TargetBitmap> cached_index_chunk_valid_res_{nullptr};
     bool cached_is_nested_index_{false};
     std::shared_ptr<TargetBitmap> cached_match_res_{nullptr};

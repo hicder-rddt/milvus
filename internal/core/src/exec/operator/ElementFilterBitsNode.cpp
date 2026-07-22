@@ -214,11 +214,7 @@ PhyElementFilterBitsNode::EvaluateElementExpression(
                    "ElementFilterBitsNode: expression evaluation should return "
                    "exactly one result");
 
-        auto col_vec = std::dynamic_pointer_cast<ColumnVector>(results[0]);
-        if (!col_vec) {
-            ThrowInfo(ExprInvalid,
-                      "ElementFilterBitsNode result should be ColumnVector");
-        }
+        auto col_vec = GetColumnVector(results[0]);
         if (!col_vec->IsBitmap()) {
             ThrowInfo(ExprInvalid,
                       "ElementFilterBitsNode result should be bitmap");
@@ -268,12 +264,7 @@ PhyElementFilterBitsNode::EvaluateElementExpression(
                        "should return "
                        "exactly one result");
 
-            auto col_vec = std::dynamic_pointer_cast<ColumnVector>(results[0]);
-            if (!col_vec) {
-                ThrowInfo(
-                    ExprInvalid,
-                    "ElementFilterBitsNode result should be ColumnVector");
-            }
+            auto col_vec = GetColumnVector(results[0]);
             if (!col_vec->IsBitmap()) {
                 ThrowInfo(ExprInvalid,
                           "ElementFilterBitsNode result should be bitmap");

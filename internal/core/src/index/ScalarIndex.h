@@ -23,6 +23,7 @@
 
 #include "common/Types.h"
 #include "common/EasyAssert.h"
+#include "common/RoaringBitmapVector.h"
 #include "index/Index.h"
 #include "fmt/format.h"
 #include "index/Meta.h"
@@ -123,11 +124,27 @@ class ScalarIndex : public IndexBase {
     virtual const TargetBitmap
     In(size_t n, const T* values) = 0;
 
+    virtual RoaringBitmapVectorPtr
+    InRoaring(size_t n, const T* values) {
+        auto bitset = In(n, values);
+        auto valid = IsNotNull();
+        return std::make_shared<RoaringBitmapVector>(std::move(bitset),
+                                                     std::move(valid));
+    }
+
     virtual const TargetBitmap
     IsNull() = 0;
 
     virtual TargetBitmap
     IsNotNull() = 0;
+
+    virtual RoaringBitmapVectorPtr
+    IsNotNullRoaring() {
+        auto valid = IsNotNull();
+        auto all_valid = valid.clone();
+        return std::make_shared<RoaringBitmapVector>(std::move(valid),
+                                                     std::move(all_valid));
+    }
 
     virtual const TargetBitmap
     InApplyFilter(size_t n,
@@ -146,14 +163,42 @@ class ScalarIndex : public IndexBase {
     virtual const TargetBitmap
     NotIn(size_t n, const T* values) = 0;
 
+    virtual RoaringBitmapVectorPtr
+    NotInRoaring(size_t n, const T* values) {
+        auto bitset = NotIn(n, values);
+        auto valid = IsNotNull();
+        return std::make_shared<RoaringBitmapVector>(std::move(bitset),
+                                                     std::move(valid));
+    }
+
     virtual const TargetBitmap
     Range(const T& value, OpType op) = 0;
+
+    virtual RoaringBitmapVectorPtr
+    RangeRoaring(const T& value, OpType op) {
+        auto bitset = Range(value, op);
+        auto valid = IsNotNull();
+        return std::make_shared<RoaringBitmapVector>(std::move(bitset),
+                                                     std::move(valid));
+    }
 
     virtual const TargetBitmap
     Range(const T& lower_bound_value,
           bool lb_inclusive,
           const T& upper_bound_value,
           bool ub_inclusive) = 0;
+
+    virtual RoaringBitmapVectorPtr
+    RangeRoaring(const T& lower_bound_value,
+                 bool lb_inclusive,
+                 const T& upper_bound_value,
+                 bool ub_inclusive) {
+        auto bitset = Range(
+            lower_bound_value, lb_inclusive, upper_bound_value, ub_inclusive);
+        auto valid = IsNotNull();
+        return std::make_shared<RoaringBitmapVector>(std::move(bitset),
+                                                     std::move(valid));
+    }
 
     virtual std::optional<T>
     Reverse_Lookup(size_t offset) const = 0;
@@ -213,7 +258,7 @@ class ScalarIndex : public IndexBase {
     }
 
     virtual void
-    BuildWithFieldData(const std::vector<FieldDataPtr>& field_datas) {
+    BuildWithFieldData(const std::vector<FieldDataPtr>& field_data) {
         ThrowInfo(Unsupported, "BuildwithFieldData is not supported");
     }
 

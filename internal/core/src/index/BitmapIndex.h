@@ -89,13 +89,19 @@ class BitmapIndex : public ScalarIndex<T> {
     Build(const Config& config = {}) override;
 
     void
-    BuildWithFieldData(const std::vector<FieldDataPtr>& datas) override;
+    BuildWithFieldData(const std::vector<FieldDataPtr>& data) override;
 
     const TargetBitmap
     In(size_t n, const T* values) override;
 
+    RoaringBitmapVectorPtr
+    InRoaring(size_t n, const T* values) override;
+
     const TargetBitmap
     NotIn(size_t n, const T* values) override;
+
+    RoaringBitmapVectorPtr
+    NotInRoaring(size_t n, const T* values) override;
 
     const TargetBitmap
     IsNull() override;
@@ -106,11 +112,20 @@ class BitmapIndex : public ScalarIndex<T> {
     const TargetBitmap
     Range(const T& value, OpType op) override;
 
+    RoaringBitmapVectorPtr
+    RangeRoaring(const T& value, OpType op) override;
+
     const TargetBitmap
     Range(const T& lower_bound_value,
           bool lb_inclusive,
           const T& upper_bound_value,
           bool ub_inclusive) override;
+
+    RoaringBitmapVectorPtr
+    RangeRoaring(const T& lower_bound_value,
+                 bool lb_inclusive,
+                 const T& upper_bound_value,
+                 bool ub_inclusive) override;
 
     std::optional<T>
     Reverse_Lookup(size_t offset) const override;
@@ -324,10 +339,10 @@ class BitmapIndex : public ScalarIndex<T> {
 
  private:
     void
-    BuildPrimitiveField(const std::vector<FieldDataPtr>& datas);
+    BuildPrimitiveField(const std::vector<FieldDataPtr>& data);
 
     void
-    BuildArrayField(const std::vector<FieldDataPtr>& datas);
+    BuildArrayField(const std::vector<FieldDataPtr>& data);
 
     void
     BuildArrayFieldNested(const std::vector<FieldDataPtr>& datas);

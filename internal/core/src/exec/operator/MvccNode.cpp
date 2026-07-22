@@ -79,15 +79,20 @@ PhyMvccNode::GetOutput() {
     // Visibility filtering disabled globally: skip all filtering.
     if (!segcore::SegcoreConfig::default_config()
              .get_visibility_filter_enabled()) {
-        auto col_input = is_source_node_ ? std::make_shared<ColumnVector>(
-                                               TargetBitmap(active_count_),
-                                               TargetBitmap(active_count_))
-                                         : GetColumnVector(input_);
+        auto bitmap_input =
+            is_source_node_
+                ? std::make_shared<RoaringBitmapVector>(active_count_, true)
+                : GetRoaringBitmapVector(input_);
+        if (bitmap_input == nullptr) {
+            bitmap_input =
+                RoaringBitmapVector::FromColumnVector(GetColumnVector(input_));
+        }
         if (is_source_node_) {
             query_context->set_all_rows_visible(true);
         }
         is_finished_ = true;
-        return std::make_shared<RowVector>(std::vector<VectorPtr>{col_input});
+        return std::make_shared<RowVector>(
+            std::vector<VectorPtr>{std::move(bitmap_input)});
     }
 
     // ── Sealed-segment fast path (skip timestamp mask) ──
@@ -99,35 +104,38 @@ PhyMvccNode::GetOutput() {
     if (is_source_node_ && segment_->type() == SegmentType::Sealed &&
         collection_ttl_timestamp_ == 0 &&
         query_timestamp_ >= segment_->get_max_timestamp()) {
-        auto col_input = std::make_shared<ColumnVector>(
-            TargetBitmap(active_count_), TargetBitmap(active_count_));
-        TargetBitmapView data(col_input->GetRawData(), col_input->size());
-        segment_->mask_with_delete(data, active_count_, query_timestamp_);
+        auto bitmap_input =
+            std::make_shared<RoaringBitmapVector>(active_count_, true);
+        segment_->mask_with_delete(
+            *bitmap_input, active_count_, query_timestamp_);
 
-        if (data.none()) {
+        if (bitmap_input->count() == 0) {
             query_context->set_all_rows_visible(true);
         }
 
         is_finished_ = true;
-        return std::make_shared<RowVector>(std::vector<VectorPtr>{col_input});
+        return std::make_shared<RowVector>(
+            std::vector<VectorPtr>{std::move(bitmap_input)});
     }
 
     // Default path (has filter / growing / TTL)
     // the first vector is filtering result and second bitset is a valid bitset
     // if valid_bitset[i]==false, means result[i] is null
-    auto col_input = is_source_node_ ? std::make_shared<ColumnVector>(
-                                           TargetBitmap(active_count_),
-                                           TargetBitmap(active_count_))
-                                     : GetColumnVector(input_);
-
-    TargetBitmapView data(col_input->GetRawData(), col_input->size());
+    auto bitmap_input = is_source_node_ ? std::make_shared<RoaringBitmapVector>(
+                                              active_count_, true)
+                                        : GetRoaringBitmapVector(input_);
+    if (bitmap_input == nullptr) {
+        bitmap_input =
+            RoaringBitmapVector::FromColumnVector(GetColumnVector(input_));
+    }
     segment_->mask_with_timestamps(
-        data, query_timestamp_, collection_ttl_timestamp_);
-    segment_->mask_with_delete(data, active_count_, query_timestamp_);
+        *bitmap_input, query_timestamp_, collection_ttl_timestamp_);
+    segment_->mask_with_delete(*bitmap_input, active_count_, query_timestamp_);
     is_finished_ = true;
 
-    // input_ have already been updated
-    return std::make_shared<RowVector>(std::vector<VectorPtr>{col_input});
+    // Preserve the filtered-row bitmap for downstream operators.
+    return std::make_shared<RowVector>(
+        std::vector<VectorPtr>{std::move(bitmap_input)});
 }
 
 bool

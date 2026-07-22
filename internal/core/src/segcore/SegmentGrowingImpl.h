@@ -500,6 +500,11 @@ class SegmentGrowingImpl : public SegmentGrowing {
                          Timestamp ttl = 0) const override;
 
     void
+    mask_with_timestamps(RoaringBitmapVector& bitset_chunk,
+                         Timestamp timestamp,
+                         Timestamp ttl = 0) const override;
+
+    void
     vector_search(SearchInfo& search_info,
                   const void* query_data,
                   const size_t* query_offsets,
@@ -515,6 +520,11 @@ class SegmentGrowingImpl : public SegmentGrowing {
  public:
     void
     mask_with_delete(BitsetTypeView& bitset,
+                     int64_t ins_barrier,
+                     Timestamp timestamp) const override;
+
+    void
+    mask_with_delete(RoaringBitmapVector& bitset,
                      int64_t ins_barrier,
                      Timestamp timestamp) const override;
 

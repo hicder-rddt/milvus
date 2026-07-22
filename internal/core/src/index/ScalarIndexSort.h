@@ -104,8 +104,14 @@ class ScalarIndexSort : public ScalarIndex<T> {
     const TargetBitmap
     In(size_t n, const T* values) override;
 
+    RoaringBitmapVectorPtr
+    InRoaring(size_t n, const T* values) override;
+
     const TargetBitmap
     NotIn(size_t n, const T* values) override;
+
+    RoaringBitmapVectorPtr
+    NotInRoaring(size_t n, const T* values) override;
 
     const TargetBitmap
     IsNull() override;
@@ -116,11 +122,20 @@ class ScalarIndexSort : public ScalarIndex<T> {
     const TargetBitmap
     Range(const T& value, OpType op) override;
 
+    RoaringBitmapVectorPtr
+    RangeRoaring(const T& value, OpType op) override;
+
     const TargetBitmap
     Range(const T& lower_bound_value,
           bool lb_inclusive,
           const T& upper_bound_value,
           bool ub_inclusive) override;
+
+    RoaringBitmapVectorPtr
+    RangeRoaring(const T& lower_bound_value,
+                 bool lb_inclusive,
+                 const T& upper_bound_value,
+                 bool ub_inclusive) override;
 
     std::optional<T>
     Reverse_Lookup(size_t offset) const override;
@@ -170,7 +185,7 @@ class ScalarIndexSort : public ScalarIndex<T> {
     }
 
     void
-    BuildWithFieldData(const std::vector<FieldDataPtr>& datas) override;
+    BuildWithFieldData(const std::vector<FieldDataPtr>& data) override;
 
  private:
     void
@@ -202,7 +217,7 @@ class ScalarIndexSort : public ScalarIndex<T> {
                 const Config& config) override;
 
  public:
-    // zero-cost data acess api
+    // zero-cost data access api
     ALWAYS_INLINE const IndexStructure<T>&
     operator[](size_t idx) const {
         assert(idx < size_);

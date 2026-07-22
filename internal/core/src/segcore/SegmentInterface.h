@@ -37,6 +37,7 @@
 #include "common/Array.h"
 #include "common/ArrayOffsets.h"
 #include "common/BitsetView.h"
+#include "common/RoaringBitmapVector.h"
 #include "common/EasyAssert.h"
 #include "common/FieldMeta.h"
 #include "common/Json.h"
@@ -629,6 +630,11 @@ class SegmentInternalInterface : public SegmentInterface {
                      int64_t ins_barrier,
                      Timestamp timestamp) const = 0;
 
+    virtual void
+    mask_with_delete(RoaringBitmapVector& bitset,
+                     int64_t ins_barrier,
+                     Timestamp timestamp) const = 0;
+
     // count of chunk that has raw data
     virtual int64_t
     num_chunk_data(FieldId field_id) const = 0;
@@ -639,6 +645,11 @@ class SegmentInternalInterface : public SegmentInterface {
     // bitset 1 means not hit. 0 means hit.
     virtual void
     mask_with_timestamps(BitsetTypeView& bitset_chunk,
+                         Timestamp timestamp,
+                         Timestamp collection_ttl) const = 0;
+
+    virtual void
+    mask_with_timestamps(RoaringBitmapVector& bitset_chunk,
                          Timestamp timestamp,
                          Timestamp collection_ttl) const = 0;
 

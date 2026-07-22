@@ -103,12 +103,12 @@ ScalarIndexSort<T>::Build(const Config& config) {
     if (is_built_) {
         return;
     }
-    auto field_datas = storage::CacheRawDataAndFillMissing(
+    auto field_data = storage::CacheRawDataAndFillMissing(
         std::static_pointer_cast<storage::MemFileManagerImpl>(
             this->file_manager_),
         config);
 
-    BuildWithFieldData(field_datas);
+    BuildWithFieldData(field_data);
 }
 
 template <typename T>
@@ -149,16 +149,16 @@ ScalarIndexSort<T>::Build(size_t n, const T* values, const bool* valid_data) {
 template <typename T>
 void
 ScalarIndexSort<T>::BuildWithFieldData(
-    const std::vector<milvus::FieldDataPtr>& field_datas) {
+    const std::vector<milvus::FieldDataPtr>& field_data) {
     index_build_begin_ = std::chrono::system_clock::now();
 
     if (is_nested_index_) {
-        BuildWithArrayDataNested(field_datas);
+        BuildWithArrayDataNested(field_data);
         return;
     }
 
     int64_t length = 0;
-    for (const auto& data : field_datas) {
+    for (const auto& data : field_data) {
         total_num_rows_ += data->get_num_rows();
         length += data->get_num_rows() - data->get_null_count();
     }
@@ -169,7 +169,7 @@ ScalarIndexSort<T>::BuildWithFieldData(
     data_.reserve(length);
     valid_bitset_ = TargetBitmap(total_num_rows_, false);
     int64_t offset = 0;
-    for (const auto& data : field_datas) {
+    for (const auto& data : field_data) {
         auto slice_num = data->get_num_rows();
         for (size_t i = 0; i < slice_num; ++i) {
             if (data->is_valid(i)) {
@@ -446,12 +446,12 @@ ScalarIndexSort<T>::Load(milvus::tracer::TraceContext ctx,
         GetValueFromConfig<milvus::proto::common::LoadPriority>(
             config, milvus::LOAD_PRIORITY)
             .value_or(milvus::proto::common::LoadPriority::HIGH);
-    auto index_datas = this->file_manager_->LoadIndexToMemory(
+    auto index_data = this->file_manager_->LoadIndexToMemory(
         index_files.value(), load_priority);
     BinarySet binary_set;
-    AssembleIndexDatas(index_datas, binary_set);
-    // clear index_datas to free memory early
-    index_datas.clear();
+    AssembleIndexDatas(index_data, binary_set);
+    // clear index_data to free memory early
+    index_data.clear();
     LoadWithoutAssemble(binary_set, config);
 }
 
@@ -479,6 +479,24 @@ ScalarIndexSort<T>::In(const size_t n, const T* values) {
 }
 
 template <typename T>
+RoaringBitmapVectorPtr
+ScalarIndexSort<T>::InRoaring(const size_t n, const T* values) {
+    AssertInfo(is_built_, "index has not been built");
+    auto res =
+        std::make_shared<RoaringBitmapVector>(Count(), valid_bitset_.clone());
+    for (size_t i = 0; i < n; ++i) {
+        auto lb =
+            std::lower_bound(begin(), end(), IndexStructure<T>(*(values + i)));
+        auto ub =
+            std::upper_bound(begin(), end(), IndexStructure<T>(*(values + i)));
+        for (; lb < ub; ++lb) {
+            res->Add(lb->idx_);
+        }
+    }
+    return res;
+}
+
+template <typename T>
 const TargetBitmap
 ScalarIndexSort<T>::NotIn(const size_t n, const T* values) {
     AssertInfo(is_built_, "index has not been built");
@@ -501,6 +519,25 @@ ScalarIndexSort<T>::NotIn(const size_t n, const T* values) {
     // NotIn(null) and In(null) is both false, need to mask with IsNotNull operate
     bitset &= valid_bitset_;
     return bitset;
+}
+
+template <typename T>
+RoaringBitmapVectorPtr
+ScalarIndexSort<T>::NotInRoaring(const size_t n, const T* values) {
+    AssertInfo(is_built_, "index has not been built");
+    auto res =
+        std::make_shared<RoaringBitmapVector>(Count(), valid_bitset_.clone());
+    res->Or(valid_bitset_, Count());
+    for (size_t i = 0; i < n; ++i) {
+        auto lb =
+            std::lower_bound(begin(), end(), IndexStructure<T>(*(values + i)));
+        auto ub =
+            std::upper_bound(begin(), end(), IndexStructure<T>(*(values + i)));
+        for (; lb < ub; ++lb) {
+            res->Remove(lb->idx_);
+        }
+    }
+    return res;
 }
 
 template <typename T>
@@ -576,6 +613,41 @@ ScalarIndexSort<T>::Range(const T& value, const OpType op) {
 }
 
 template <typename T>
+RoaringBitmapVectorPtr
+ScalarIndexSort<T>::RangeRoaring(const T& value, const OpType op) {
+    AssertInfo(is_built_, "index has not been built");
+    auto res =
+        std::make_shared<RoaringBitmapVector>(Count(), valid_bitset_.clone());
+    auto lb = begin();
+    auto ub = end();
+    if (ShouldSkip(value, value, op)) {
+        return res;
+    }
+    switch (op) {
+        case OpType::LessThan:
+            ub = std::lower_bound(begin(), end(), IndexStructure<T>(value));
+            break;
+        case OpType::LessEqual:
+            ub = std::upper_bound(begin(), end(), IndexStructure<T>(value));
+            break;
+        case OpType::GreaterThan:
+            lb = std::upper_bound(begin(), end(), IndexStructure<T>(value));
+            break;
+        case OpType::GreaterEqual:
+            lb = std::lower_bound(begin(), end(), IndexStructure<T>(value));
+            break;
+        default:
+            ThrowInfo(OpTypeInvalid,
+                      fmt::format("Invalid OperatorType: {}", op));
+    }
+
+    for (; lb < ub; ++lb) {
+        res->Add(lb->idx_);
+    }
+    return res;
+}
+
+template <typename T>
 const TargetBitmap
 ScalarIndexSort<T>::Range(const T& lower_bound_value,
                           bool lb_inclusive,
@@ -632,6 +704,40 @@ ScalarIndexSort<T>::Range(const T& lower_bound_value,
         }
         return bitset;
     }
+}
+
+template <typename T>
+RoaringBitmapVectorPtr
+ScalarIndexSort<T>::RangeRoaring(const T& lower_bound_value,
+                                 bool lb_inclusive,
+                                 const T& upper_bound_value,
+                                 bool ub_inclusive) {
+    AssertInfo(is_built_, "index has not been built");
+    auto res =
+        std::make_shared<RoaringBitmapVector>(Count(), valid_bitset_.clone());
+    if (lower_bound_value > upper_bound_value ||
+        (lower_bound_value == upper_bound_value &&
+         !(lb_inclusive && ub_inclusive))) {
+        return res;
+    }
+    if (ShouldSkip(lower_bound_value, upper_bound_value, OpType::Range)) {
+        return res;
+    }
+    auto lb = lb_inclusive
+                  ? std::lower_bound(
+                        begin(), end(), IndexStructure<T>(lower_bound_value))
+                  : std::upper_bound(
+                        begin(), end(), IndexStructure<T>(lower_bound_value));
+    auto ub = ub_inclusive
+                  ? std::upper_bound(
+                        begin(), end(), IndexStructure<T>(upper_bound_value))
+                  : std::lower_bound(
+                        begin(), end(), IndexStructure<T>(upper_bound_value));
+
+    for (; lb < ub; ++lb) {
+        res->Add(lb->idx_);
+    }
+    return res;
 }
 
 template <typename T>

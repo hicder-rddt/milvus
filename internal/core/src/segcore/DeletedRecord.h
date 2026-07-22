@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -272,6 +273,54 @@ class DeletedRecord {
         while (it != accessor.end() && it->first <= query_timestamp) {
             if (it->second < insert_barrier) {
                 bitset.set(it->second);
+            }
+            it++;
+        }
+    }
+
+    void
+    Query(RoaringBitmapVector& bitset,
+          int64_t insert_barrier,
+          Timestamp query_timestamp) {
+        Assert(bitset.size() == insert_barrier);
+
+        SortedDeleteList::Accessor accessor(deleted_lists_);
+        if (accessor.size() == 0) {
+            return;
+        }
+
+        auto snapshot = std::atomic_load(&latest_snapshot_);
+        if (snapshot && snapshot->max_ts > 0 &&
+            query_timestamp >= snapshot->max_ts) {
+            auto or_size = std::min({snapshot->bitset.size(), bitset.size()});
+            bitset.Or(snapshot->bitset, or_size);
+            return;
+        }
+
+        bool hit_snapshot = false;
+        SortedDeleteList::iterator next_iter;
+        {
+            std::shared_lock<std::shared_mutex> lock(snap_lock_);
+            if (!snapshots_.empty()) {
+                int loc = snapshots_.size() - 1;
+                while (loc >= 0 && snapshots_[loc].first > query_timestamp) {
+                    loc--;
+                }
+                if (loc >= 0) {
+                    next_iter = accessor.lower_bound(snap_next_pos_[loc]);
+                    auto or_size =
+                        std::min(snapshots_[loc].second.size(), bitset.size());
+                    bitset.Or(snapshots_[loc].second, or_size);
+                    hit_snapshot = true;
+                }
+            }
+        }
+
+        auto it = hit_snapshot ? next_iter : accessor.begin();
+
+        while (it != accessor.end() && it->first <= query_timestamp) {
+            if (it->second < insert_barrier) {
+                bitset.Add(it->second);
             }
             it++;
         }

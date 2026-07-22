@@ -34,6 +34,7 @@
 #include "common/EasyAssert.h"
 #include "common/FieldMeta.h"
 #include "common/IndexMeta.h"
+#include "common/RoaringBitmapVector.h"
 #include "common/Schema.h"
 #include "common/Types.h"
 #include "common/common_type_c.h"
@@ -457,7 +458,7 @@ TEST(TextMatch, BuildIndexFromFieldDataMultiBatchNullable) {
     auto batch1 = make_batch({"", "foo", ""}, {false, true, false});
     auto batch2 = make_batch({"bar", ""}, {true, false});
 
-    std::vector<milvus::FieldDataPtr> field_datas = {batch0, batch1, batch2};
+    std::vector<milvus::FieldDataPtr> field_data = {batch0, batch1, batch2};
 
     auto index = std::make_unique<Index>(200,
                                          "test_multi_batch",
@@ -467,7 +468,7 @@ TEST(TextMatch, BuildIndexFromFieldDataMultiBatchNullable) {
     index->CreateReader(milvus::index::SetBitsetGrowing);
     index->RegisterAnalyzer("milvus_tokenizer", "{}");
 
-    index->BuildIndexFromFieldData(field_datas, true /* nullable */);
+    index->BuildIndexFromFieldData(field_data, true /* nullable */);
     index->Commit();
     index->Reload();
 
@@ -787,7 +788,7 @@ TEST(TextMatch, BuildIndexFromFieldDataSingleBatchNullable) {
     }
     fd->FillFieldData(texts.data(), valid_bytes.data(), texts.size(), 0);
 
-    std::vector<milvus::FieldDataPtr> field_datas = {fd};
+    std::vector<milvus::FieldDataPtr> field_data = {fd};
 
     auto index = std::make_unique<Index>(200,
                                          "test_single_batch",
@@ -797,7 +798,7 @@ TEST(TextMatch, BuildIndexFromFieldDataSingleBatchNullable) {
     index->CreateReader(milvus::index::SetBitsetGrowing);
     index->RegisterAnalyzer("milvus_tokenizer", "{}");
 
-    index->BuildIndexFromFieldData(field_datas, true);
+    index->BuildIndexFromFieldData(field_data, true);
     index->Commit();
     index->Reload();
 
@@ -1880,7 +1881,7 @@ TEST(TextMatch, ExprResCacheFilterBitsDoesNotDuplicateTextMatchEntry) {
     auto expr = GetMatchExpr(schema, "football", OpType::TextMatch);
     auto plan_fragment = plan::PlanFragment(expr);
     auto query_context = std::make_shared<milvus::exec::QueryContext>(
-        DEAFULT_QUERY_ID, seg.get(), N, MAX_TIMESTAMP);
+        DEFAULT_QUERY_ID, seg.get(), N, MAX_TIMESTAMP);
     query_context->set_enable_expr_cache(true);
     query_context->set_enable_sub_expr_cache_write(false);
 
@@ -1915,7 +1916,7 @@ ExecuteFilterBitsWithFullCache(
     int64_t entity_ttl_physical_time_us) {
     auto plan_fragment = plan::PlanFragment(filter_plan);
     auto query_context = std::make_shared<milvus::exec::QueryContext>(
-        DEAFULT_QUERY_ID,
+        DEFAULT_QUERY_ID,
         segment,
         active_count,
         timestamp,
@@ -1933,10 +1934,18 @@ ExecuteFilterBitsWithFullCache(
     auto row = ExecPlanNodeVisitor::ExecuteTask(plan_fragment, query_context);
     AssertInfo(row != nullptr,
                "ExecuteTask returned null row vector for query expression");
-    auto col_vec = std::dynamic_pointer_cast<ColumnVector>(row->childrens()[0]);
-    AssertInfo(col_vec != nullptr, "failed to cast to ColumnVector");
-    BitsetTypeView view(col_vec->GetRawData(), col_vec->size());
-    BitsetType query_view(view);
+    auto bitmap_vec = row->childrens()[0];
+    BitsetType query_view;
+    if (auto col_vec = std::dynamic_pointer_cast<ColumnVector>(bitmap_vec)) {
+        BitsetTypeView view(col_vec->GetRawData(), col_vec->size());
+        query_view.append(view);
+    } else if (auto roaring_vec =
+                   std::dynamic_pointer_cast<RoaringBitmapVector>(bitmap_vec)) {
+        query_view = roaring_vec->ToTargetBitmap();
+    } else {
+        ThrowInfo(UnexpectedError,
+                  "filter result must be a dense or roaring bitmap vector");
+    }
     query_view.flip();
     return query_view;
 }

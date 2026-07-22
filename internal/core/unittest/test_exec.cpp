@@ -29,6 +29,7 @@
 #include "common/Consts.h"
 #include "common/FieldData.h"
 #include "common/FieldDataInterface.h"
+#include "common/RoaringBitmapVector.h"
 #include "common/Schema.h"
 #include "common/Types.h"
 #include "common/Vector.h"
@@ -336,6 +337,9 @@ TEST_P(TaskTest, CallExprEmpty) {
         if (!result) {
             break;
         }
+        EXPECT_NE(std::dynamic_pointer_cast<RoaringBitmapVector>(
+                      result->child(0)),
+                  nullptr);
         num_rows += result->size();
     }
     auto cost = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -963,13 +967,11 @@ TEST(TaskTest, SkipIndexWithBitmapInputAlignment) {
         if (!result) {
             break;
         }
-        auto col_vec =
-            std::dynamic_pointer_cast<ColumnVector>(result->child(0));
-        if (col_vec && col_vec->IsBitmap()) {
-            TargetBitmapView view(col_vec->GetRawData(), col_vec->size());
-            total_rows += col_vec->size();
-            filtered_rows +=
-                view.count();  // These are filtered OUT (don't match)
+        auto roaring_vec = std::dynamic_pointer_cast<RoaringBitmapVector>(
+            result->child(0));
+        if (roaring_vec) {
+            total_rows += roaring_vec->size();
+            filtered_rows += roaring_vec->count();
         }
     }
 

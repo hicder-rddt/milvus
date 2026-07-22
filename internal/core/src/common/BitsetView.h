@@ -19,11 +19,18 @@
 #include <fmt/core.h>
 
 #include <boost_ext/dynamic_bitset_ext.hpp>
+#include <roaring/roaring.h>
+
+#include <cstdlib>
 #include <deque>
+#include <cstring>
+#include <limits>
+#include <memory>
 
 #include "bitset/detail/element_wise.h"
 #include "common/Types.h"
 #include "common/EasyAssert.h"
+#include "common/RoaringBitmapVector.h"
 #include "knowhere/bitsetview.h"
 
 namespace milvus {
@@ -39,6 +46,10 @@ class BitsetView : public knowhere::BitsetView {
 
     BitsetView(const uint8_t* data, size_t num_bits)
         : knowhere::BitsetView(data, num_bits) {  // NOLINT
+    }
+
+    BitsetView(const knowhere::BitsetView& bitset)  // NOLINT
+        : knowhere::BitsetView(bitset) {
     }
 
     BitsetView(const BitsetType& bitset)  // NOLINT
@@ -102,6 +113,102 @@ class BitsetView : public knowhere::BitsetView {
                    this->size());
         return {data() + (offset >> 3), size};
     }
+};
+
+class FrozenRoaringBitsetView {
+ public:
+    explicit FrozenRoaringBitsetView(const TargetBitmapView& bitset) {
+        num_bits_ = bitset.size();
+        num_filtered_out_bits_ = bitset.count();
+        if (num_bits_ == 0) {
+            return;
+        }
+
+        std::unique_ptr<roaring_bitmap_t, RoaringDeleter> bitmap(
+            roaring_bitmap_create());
+        AssertInfo(bitmap != nullptr, "failed to create roaring bitmap");
+
+        for (auto offset = bitset.find_first(true); offset.has_value();
+             offset = bitset.find_next(offset.value(), true)) {
+            AssertInfo(offset.value() <= std::numeric_limits<uint32_t>::max(),
+                       "roaring bitmap only supports uint32 ids, got {}",
+                       offset.value());
+            roaring_bitmap_add(bitmap.get(),
+                               static_cast<uint32_t>(offset.value()));
+        }
+
+        Freeze(bitmap.get());
+    }
+
+    explicit FrozenRoaringBitsetView(const RoaringBitmapVector& bitset) {
+        num_bits_ = bitset.size();
+        num_filtered_out_bits_ = bitset.count();
+        if (num_bits_ == 0) {
+            return;
+        }
+
+        Freeze(bitset.bitmap());
+    }
+
+    const BitsetView&
+    view() const {
+        return view_;
+    }
+
+    size_t
+    size() const {
+        return num_bits_;
+    }
+
+    size_t
+    count() const {
+        return num_filtered_out_bits_;
+    }
+
+ private:
+    struct FreeDeleter {
+        void
+        operator()(char* ptr) const {
+            std::free(ptr);
+        }
+    };
+
+    struct RoaringDeleter {
+        void
+        operator()(roaring_bitmap_t* ptr) const {
+            roaring_bitmap_free(ptr);
+        }
+    };
+
+    static constexpr size_t kFrozenAlignment = 32;
+
+    void
+    Freeze(const roaring_bitmap_t* bitmap) {
+        frozen_size_ = roaring_bitmap_frozen_size_in_bytes(bitmap);
+        auto aligned_size =
+            ((frozen_size_ + kFrozenAlignment - 1) / kFrozenAlignment) *
+            kFrozenAlignment;
+        void* aligned_buffer = nullptr;
+        auto alloc_status =
+            posix_memalign(&aligned_buffer, kFrozenAlignment, aligned_size);
+        AssertInfo(alloc_status == 0 && aligned_buffer != nullptr,
+                   "failed to allocate aligned frozen roaring bitmap buffer");
+        frozen_buffer_.reset(static_cast<char*>(aligned_buffer));
+        std::memset(frozen_buffer_.get(), 0, aligned_size);
+
+        roaring_bitmap_frozen_serialize(bitmap, frozen_buffer_.get());
+        view_ = BitsetView(
+            knowhere::BitsetView::FromFrozenRoaring(frozen_buffer_.get(),
+                                                    frozen_size_,
+                                                    num_bits_,
+                                                    num_filtered_out_bits_));
+    }
+
+    std::unique_ptr<char, FreeDeleter> frozen_buffer_;
+    size_t frozen_size_{0};
+    size_t num_bits_{0};
+    size_t num_filtered_out_bits_{0};
+    BitsetView view_;
 };
 
 }  // namespace milvus

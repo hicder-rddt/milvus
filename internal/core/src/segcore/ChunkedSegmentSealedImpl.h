@@ -1296,6 +1296,11 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
                          Timestamp collection_ttl) const override;
 
     void
+    mask_with_timestamps(RoaringBitmapVector& bitset_chunk,
+                         Timestamp timestamp,
+                         Timestamp collection_ttl) const override;
+
+    void
     vector_search(SearchInfo& search_info,
                   const void* query_data,
                   const size_t* query_offsets,
@@ -1307,6 +1312,11 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
 
     void
     mask_with_delete(BitsetTypeView& bitset,
+                     int64_t ins_barrier,
+                     Timestamp timestamp) const override;
+
+    void
+    mask_with_delete(RoaringBitmapVector& bitset,
                      int64_t ins_barrier,
                      Timestamp timestamp) const override;
 

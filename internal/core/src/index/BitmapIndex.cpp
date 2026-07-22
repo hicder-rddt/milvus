@@ -760,6 +760,28 @@ BitmapIndex<T>::In(const size_t n, const T* values) {
 }
 
 template <typename T>
+RoaringBitmapVectorPtr
+BitmapIndex<T>::InRoaring(const size_t n, const T* values) {
+    tracer::AutoSpan span("BitmapIndex::InRoaring", tracer::GetRootSpan());
+    AssertInfo(is_built_, "index has not been built");
+    if (!is_mmap_ && build_mode_ != BitmapIndexBuildMode::ROARING) {
+        return ScalarIndex<T>::InRoaring(n, values);
+    }
+    auto res = std::make_shared<RoaringBitmapVector>(total_num_rows_,
+                                                     valid_bitset_.clone());
+    auto& source = is_mmap_ ? bitmap_info_map_ : data_;
+    for (size_t i = 0; i < n; ++i) {
+        auto it = source.find(values[i]);
+        if (it != source.end()) {
+            for (const auto offset : it->second) {
+                res->Add(offset);
+            }
+        }
+    }
+    return res;
+}
+
+template <typename T>
 const TargetBitmap
 BitmapIndex<T>::NotIn(const size_t n, const T* values) {
     tracer::AutoSpan span("BitmapIndex::NotIn", tracer::GetRootSpan());
@@ -809,6 +831,29 @@ BitmapIndex<T>::NotIn(const size_t n, const T* values) {
         res &= valid_bitset_;
         return res;
     }
+}
+
+template <typename T>
+RoaringBitmapVectorPtr
+BitmapIndex<T>::NotInRoaring(const size_t n, const T* values) {
+    tracer::AutoSpan span("BitmapIndex::NotInRoaring", tracer::GetRootSpan());
+    AssertInfo(is_built_, "index has not been built");
+    if (!is_mmap_ && build_mode_ != BitmapIndexBuildMode::ROARING) {
+        return ScalarIndex<T>::NotInRoaring(n, values);
+    }
+    auto res = std::make_shared<RoaringBitmapVector>(total_num_rows_,
+                                                     valid_bitset_.clone());
+    res->Or(valid_bitset_, total_num_rows_);
+    auto& source = is_mmap_ ? bitmap_info_map_ : data_;
+    for (size_t i = 0; i < n; ++i) {
+        auto it = source.find(values[i]);
+        if (it != source.end()) {
+            for (const auto offset : it->second) {
+                res->Remove(offset);
+            }
+        }
+    }
+    return res;
 }
 
 template <typename T>
@@ -908,6 +953,47 @@ BitmapIndex<T>::Range(const T& value, OpType op) {
         return std::move(RangeForBitset(value, op));
     }
 }
+template <typename T>
+RoaringBitmapVectorPtr
+BitmapIndex<T>::RangeRoaring(const T& value, OpType op) {
+    tracer::AutoSpan span("BitmapIndex::RangeRoaring", tracer::GetRootSpan());
+    AssertInfo(is_built_, "index has not been built");
+    if (!is_mmap_ && build_mode_ != BitmapIndexBuildMode::ROARING) {
+        return ScalarIndex<T>::RangeRoaring(value, op);
+    }
+    auto res = std::make_shared<RoaringBitmapVector>(total_num_rows_,
+                                                     valid_bitset_.clone());
+    if (ShouldSkip(value, value, op)) {
+        return res;
+    }
+    auto& source = is_mmap_ ? bitmap_info_map_ : data_;
+    auto lb = source.begin();
+    auto ub = source.end();
+    switch (op) {
+        case OpType::LessThan:
+            ub = source.lower_bound(value);
+            break;
+        case OpType::LessEqual:
+            ub = source.upper_bound(value);
+            break;
+        case OpType::GreaterThan:
+            lb = source.upper_bound(value);
+            break;
+        case OpType::GreaterEqual:
+            lb = source.lower_bound(value);
+            break;
+        default:
+            ThrowInfo(OpTypeInvalid,
+                      fmt::format("Invalid OperatorType: {}", op));
+    }
+    for (; lb != ub; ++lb) {
+        for (const auto offset : lb->second) {
+            res->Add(offset);
+        }
+    }
+    return res;
+}
+
 template <typename T>
 TargetBitmap
 BitmapIndex<T>::RangeForMmap(const T& value, const OpType op) {
@@ -1112,6 +1198,39 @@ BitmapIndex<T>::Range(const T& lower_value,
         return RangeForBitset(
             lower_value, lb_inclusive, upper_value, ub_inclusive);
     }
+}
+
+template <typename T>
+RoaringBitmapVectorPtr
+BitmapIndex<T>::RangeRoaring(const T& lower_value,
+                             bool lb_inclusive,
+                             const T& upper_value,
+                             bool ub_inclusive) {
+    tracer::AutoSpan span("BitmapIndex::RangeRoaringWithBounds",
+                          tracer::GetRootSpan());
+    AssertInfo(is_built_, "index has not been built");
+    if (!is_mmap_ && build_mode_ != BitmapIndexBuildMode::ROARING) {
+        return ScalarIndex<T>::RangeRoaring(
+            lower_value, lb_inclusive, upper_value, ub_inclusive);
+    }
+    auto res = std::make_shared<RoaringBitmapVector>(total_num_rows_,
+                                                     valid_bitset_.clone());
+    if (lower_value > upper_value ||
+        (lower_value == upper_value && !(lb_inclusive && ub_inclusive)) ||
+        ShouldSkip(lower_value, upper_value, OpType::Range)) {
+        return res;
+    }
+    auto& source = is_mmap_ ? bitmap_info_map_ : data_;
+    auto lb = lb_inclusive ? source.lower_bound(lower_value)
+                           : source.upper_bound(lower_value);
+    auto ub = ub_inclusive ? source.upper_bound(upper_value)
+                           : source.lower_bound(upper_value);
+    for (; lb != ub; ++lb) {
+        for (const auto offset : lb->second) {
+            res->Add(offset);
+        }
+    }
+    return res;
 }
 
 template <typename T>

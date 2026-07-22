@@ -394,6 +394,13 @@ SegmentGrowingImpl::mask_with_delete(BitsetTypeView& bitset,
 }
 
 void
+SegmentGrowingImpl::mask_with_delete(RoaringBitmapVector& bitset,
+                                     int64_t ins_barrier,
+                                     Timestamp timestamp) const {
+    deleted_record_.Query(bitset, ins_barrier, timestamp);
+}
+
+void
 SegmentGrowingImpl::try_remove_chunks(FieldId fieldId) {
     //remove the chunk data to reduce memory consumption
     auto& field_meta = schema_->operator[](fieldId);
@@ -2285,6 +2292,22 @@ SegmentGrowingImpl::mask_with_timestamps(BitsetTypeView& bitset_chunk,
         bitset.resize(pilot, true);
         bitset.resize(size, false);
         bitset_chunk |= bitset;
+    }
+}
+
+void
+SegmentGrowingImpl::mask_with_timestamps(RoaringBitmapVector& bitset_chunk,
+                                         Timestamp timestamp,
+                                         Timestamp collection_ttl) const {
+    if (collection_ttl > 0) {
+        auto& timestamps = get_timestamps();
+        auto size = bitset_chunk.size();
+        if (size > 0 && timestamps[size - 1] <= collection_ttl) {
+            bitset_chunk.SetAll();
+            return;
+        }
+        auto pilot = upper_bound(timestamps, 0, size, collection_ttl);
+        bitset_chunk.AddRange(0, pilot);
     }
 }
 

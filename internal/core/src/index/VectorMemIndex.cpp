@@ -163,6 +163,29 @@ LoadEmptyEmbListOffsetsFromBinarySet(const BinarySet& binary_set) {
     return LoadEmptyEmbListOffsetsFromPayload(data->data.get(), data->size);
 }
 
+bool
+RequiresDenseBitset(const IndexType& index_type) {
+    return index_type == knowhere::IndexEnum::INDEX_CUVS_BRUTEFORCE ||
+           index_type == knowhere::IndexEnum::INDEX_CUVS_IVFFLAT ||
+           index_type == knowhere::IndexEnum::INDEX_CUVS_IVFPQ ||
+           index_type == knowhere::IndexEnum::INDEX_CUVS_CAGRA;
+}
+
+struct SearchBitset {
+    SearchBitset(const BitsetView& bitset, const IndexType& index_type)
+        : view(bitset) {
+        if (!bitset.is_roaring() || !RequiresDenseBitset(index_type)) {
+            return;
+        }
+        dense = bitset.ToDense();
+        view = BitsetView(knowhere::BitsetView(
+            dense.data(), bitset.size(), bitset.count(), bitset.id_offset()));
+    }
+
+    std::vector<uint8_t> dense;
+    BitsetView view;
+};
+
 }  // namespace
 
 template <typename T>
@@ -285,7 +308,9 @@ VectorMemIndex<T>::VectorIterators(const milvus::DatasetPtr dataset,
         }
         return make_empty_iterators(num_queries);
     }
-    return this->index_.AnnIterator(dataset, conf, bitset, false, op_context);
+    SearchBitset search_bitset(bitset, GetIndexType());
+    return this->index_.AnnIterator(
+        dataset, conf, search_bitset.view, false, op_context);
 }
 
 template <typename T>
@@ -755,14 +780,15 @@ VectorMemIndex<T>::Query(const DatasetPtr dataset,
         search_result.unity_topK_ = topk;
         return;
     }
+    SearchBitset search_bitset(bitset, GetIndexType());
     // TODO :: check dim of search data
     auto final = [&] {
         auto index_type = GetIndexType();
         if (CheckAndUpdateKnowhereRangeSearchParam(
                 search_info, topk, GetMetricType(), search_conf)) {
             milvus::tracer::AddEvent("start_knowhere_index_range_search");
-            auto res =
-                index_.RangeSearch(dataset, search_conf, bitset, op_context);
+            auto res = index_.RangeSearch(
+                dataset, search_conf, search_bitset.view, op_context);
             milvus::tracer::AddEvent("finish_knowhere_index_range_search");
             if (!res.has_value()) {
                 ThrowInfo(ErrorCode::UnexpectedError,
@@ -776,7 +802,8 @@ VectorMemIndex<T>::Query(const DatasetPtr dataset,
             return result;
         } else {
             milvus::tracer::AddEvent("start_knowhere_index_search");
-            auto res = index_.Search(dataset, search_conf, bitset, op_context);
+            auto res = index_.Search(
+                dataset, search_conf, search_bitset.view, op_context);
             milvus::tracer::AddEvent("finish_knowhere_index_search");
             if (!res.has_value()) {
                 ThrowInfo(

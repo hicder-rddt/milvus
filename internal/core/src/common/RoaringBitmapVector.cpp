@@ -14,34 +14,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "LogicalUnaryExpr.h"
-
-#include "common/EasyAssert.h"
-#include "common/Tracer.h"
-#include "common/ValueOp.h"
-#include "exec/expression/Utils.h"
+#include "common/RoaringBitmapVector.h"
 
 namespace milvus {
-namespace exec {
 
-void
-PhyLogicalUnaryExpr::Eval(EvalCtx& context, VectorPtr& result) {
-    tracer::AutoSpan span("PhyLogicalUnaryExpr::Eval", tracer::GetRootSpan());
+RoaringBitmapVector::~RoaringBitmapVector() = default;
 
-    AssertInfo(inputs_.size() == 1,
-               "logical unary expr must has one input, but now {}",
-               inputs_.size());
-
-    inputs_[0]->Eval(context, result);
-    if (expr_->op_type_ == milvus::expr::LogicalUnaryExpr::OpType::LogicalNot) {
-        if (auto roaring = GetRoaringBitmapVector(result)) {
-            roaring->Flip();
-            result = std::move(roaring);
-        } else {
-            common::ThreeValuedLogicOp::Not(GetColumnVector(result));
-        }
-    }
-}
-
-}  //namespace exec
 }  // namespace milvus

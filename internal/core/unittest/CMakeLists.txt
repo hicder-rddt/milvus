@@ -149,6 +149,14 @@ target_link_libraries(all_tests
         milvus-storage
         )
 
+if (APPLE)
+    # xsimd 9 expects global exp10/exp10f declarations that macOS 26 removed.
+    # Include only the compatibility declarations; the full production PCH is
+    # unnecessary for the monolithic test target.
+    target_compile_options(all_tests PRIVATE
+            -include ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/macos_xsimd_compat.hxx)
+endif()
+
 # Link plan parser library using full path and set RPATH
 target_link_options(all_tests PRIVATE "-L${PLANPARSER_LIB_DIR}")
 target_link_libraries(all_tests milvus-planparser-cpp)

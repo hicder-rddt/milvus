@@ -127,24 +127,18 @@ PhyIterativeFilterNode::GetOutput() {
                 "PhyIterativeFilterNode result size should be size one and not "
                 "be nullptr");
 
-            if (auto col_vec =
-                    std::dynamic_pointer_cast<ColumnVector>(results_[0])) {
-                if (col_vec->IsBitmap()) {
-                    auto col_vec_size = col_vec->size();
-                    TargetBitmapView view(col_vec->GetRawData(), col_vec_size);
-                    bitset.append(view);
-                    TargetBitmapView valid_view(col_vec->GetValidRawData(),
-                                                col_vec_size);
-                    valid_bitset.append(valid_view);
-                    num_processed_rows_ += col_vec_size;
-                } else {
-                    ThrowInfo(ExprInvalid,
-                              "PhyIterativeFilterNode result should be bitmap");
-                }
+            auto col_vec = GetColumnVector(results_[0]);
+            if (col_vec->IsBitmap()) {
+                auto col_vec_size = col_vec->size();
+                TargetBitmapView view(col_vec->GetRawData(), col_vec_size);
+                bitset.append(view);
+                TargetBitmapView valid_view(col_vec->GetValidRawData(),
+                                            col_vec_size);
+                valid_bitset.append(valid_view);
+                num_processed_rows_ += col_vec_size;
             } else {
-                ThrowInfo(
-                    ExprInvalid,
-                    "PhyIterativeFilterNode result should be ColumnVector");
+                ThrowInfo(ExprInvalid,
+                          "PhyIterativeFilterNode result should be bitmap");
             }
         }
         Assert(bitset.size() == need_process_rows_);
@@ -257,8 +251,7 @@ PhyIterativeFilterNode::GetOutput() {
                         "one and not "
                         "be nullptr");
 
-                    auto col_vec =
-                        std::dynamic_pointer_cast<ColumnVector>(results[0]);
+                    auto col_vec = GetColumnVector(results[0]);
                     auto col_vec_size = col_vec->size();
                     TargetBitmapView bitsetview(col_vec->GetRawData(),
                                                 col_vec_size);

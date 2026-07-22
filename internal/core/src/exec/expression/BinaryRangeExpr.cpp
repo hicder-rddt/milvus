@@ -424,14 +424,16 @@ PhyBinaryRangeFilterExpr::ExecRangeVisitorImplForIndex() {
         return nullptr;
     }
 
-    auto execute_sub_batch = [lower_inclusive, upper_inclusive](
-                                 Index* index_ptr,
-                                 HighPrecisionType val1,
-                                 HighPrecisionType val2) {
-        BinaryRangeIndexFunc<T> func;
-        return func(index_ptr, val1, val2, lower_inclusive, upper_inclusive);
-    };
-    auto res = ProcessIndexChunks<T>(execute_sub_batch, val1, val2);
+    auto execute_sub_batch =
+        [lower_inclusive, upper_inclusive](
+            Index* index_ptr, HighPrecisionType val1, HighPrecisionType val2) {
+            return index_ptr->RangeRoaring(static_cast<IndexInnerType>(val1),
+                                           lower_inclusive,
+                                           static_cast<IndexInnerType>(val2),
+                                           upper_inclusive);
+        };
+    auto res = ProcessIndexChunksRoaring<T>(
+        execute_sub_batch, expr_->column_.element_level_, val1, val2);
     AssertInfo(res->size() == real_batch_size,
                "internal error: expr processed rows {} not equal "
                "expect batch size {}",
