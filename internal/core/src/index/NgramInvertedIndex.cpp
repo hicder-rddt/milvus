@@ -311,7 +311,7 @@ NgramInvertedIndex::Load(milvus::tracer::TraceContext ctx,
     auto load_in_mmap =
         GetValueFromConfig<bool>(config, ENABLE_MMAP).value_or(true);
     wrapper_ = std::make_shared<TantivyIndexWrapper>(
-        path_.c_str(), load_in_mmap, milvus::index::SetBitsetSealed);
+        path_.c_str(), load_in_mmap, milvus::index::SetHitsSealed);
 
     if (!load_in_mmap) {
         // the index is loaded in ram, so we can remove files in advance
@@ -869,10 +869,40 @@ NgramInvertedIndex::ApplyIterativeNgramFilter(
 
     for (size_t i = 0; i < std::min(sorted_terms.size(), max_iterations); i++) {
         TargetBitmap term_bitset{total_count};
-        wrapper_->ngram_term_posting_list(sorted_terms[i], &term_bitset);
+        auto sink = TantivyHitSink::Dense(term_bitset);
+        wrapper_->ngram_term_posting_list(sorted_terms[i], &sink);
         bitset &= term_bitset;
 
         double current_hit_rate = 1.0 * bitset.count() / total_count;
+        if (current_hit_rate < kBreakThreshold) {
+            break;
+        }
+        if (avg_row_size_ < kSmallRowThreshold &&
+            current_hit_rate < kBreakThresholdForSmallRow) {
+            break;
+        }
+    }
+}
+
+void
+NgramInvertedIndex::ApplyIterativeNgramFilter(
+    const std::vector<std::string>& sorted_terms,
+    size_t total_count,
+    Bitmap& bitmap) {
+    auto max_iterations = kMaxIterations;
+    if (avg_row_size_ < kSmallRowThreshold) {
+        max_iterations = kMaxIterationsForSmallRow;
+    } else if (avg_row_size_ < kMediumRowThreshold) {
+        max_iterations = kMaxIterationsForMediumRow;
+    }
+
+    for (size_t i = 0; i < std::min(sorted_terms.size(), max_iterations); i++) {
+        roaring::Roaring hits;
+        auto sink = TantivyHitSink::Roaring(total_count, hits);
+        wrapper_->ngram_term_posting_list(sorted_terms[i], &sink);
+        bitmap.and_with(Bitmap(total_count, std::move(hits)));
+
+        double current_hit_rate = 1.0 * bitmap.count() / total_count;
         if (current_hit_rate < kBreakThreshold) {
             break;
         }
@@ -960,7 +990,8 @@ NgramInvertedIndex::ExecutePhase1(const std::string& literal,
         // Batch strategy: query all ngram terms at once
         for (const auto& l : literals_vec) {
             TargetBitmap ngram_bitset{total_count};
-            wrapper_->ngram_match_query(l, min_gram_, max_gram_, &ngram_bitset);
+            auto sink = TantivyHitSink::Dense(ngram_bitset);
+            wrapper_->ngram_match_query(l, min_gram_, max_gram_, &sink);
             candidates &= ngram_bitset;
         }
     } else {
@@ -984,6 +1015,81 @@ NgramInvertedIndex::ExecutePhase1(const std::string& literal,
                                 static_cast<int>(total_count));
         root_span->SetAttribute("phase1_pre_hit_rate", pre_hit_rate);
         root_span->SetAttribute("phase1_post_hit_rate", post_hit_rate);
+        root_span->SetAttribute("phase1_use_batch_strategy",
+                                use_batch_strategy);
+    }
+}
+
+void
+NgramInvertedIndex::ExecutePhase1(const std::string& literal,
+                                  proto::plan::OpType op_type,
+                                  Bitmap& candidates) {
+    tracer::AutoSpan span(
+        "NgramInvertedIndex::ExecutePhase1", tracer::GetRootSpan(), true);
+
+    const auto total_count = static_cast<size_t>(Count());
+    AssertInfo(total_count > 0, "ExecutePhase1: total_count must be > 0");
+    AssertInfo(candidates.size() == total_count,
+               "ExecutePhase1: candidates size {} != total_count {}",
+               candidates.size(),
+               total_count);
+    if (candidates.none()) {
+        return;
+    }
+
+    const auto pre_count = candidates.count();
+    const double candidates_hit_rate = 1.0 * pre_count / total_count;
+
+    std::vector<std::string> literals;
+    if (op_type == proto::plan::OpType::Match) {
+        literals = split_by_wildcard(literal);
+    } else if (op_type == proto::plan::OpType::RegexMatch) {
+        for (const auto& item : extract_literals_from_regex(literal)) {
+            if (Utf8LiteralLength(item) >= min_gram_) {
+                literals.push_back(item);
+            }
+        }
+    } else {
+        literals.push_back(literal);
+    }
+    AssertInfo(!literals.empty(),
+               "ExecutePhase1: pattern has no usable ngram literal");
+
+    for (const auto& item : literals) {
+        AssertInfo(Utf8LiteralLength(item) >= min_gram_,
+                   "ExecutePhase1: literal char length {} < min_gram {}",
+                   Utf8LiteralLength(item),
+                   min_gram_);
+    }
+
+    const bool use_batch_strategy =
+        ShouldUseBatchStrategy(candidates_hit_rate);
+    if (use_batch_strategy) {
+        for (const auto& item : literals) {
+            roaring::Roaring hits;
+            auto sink = TantivyHitSink::Roaring(total_count, hits);
+            wrapper_->ngram_match_query(item, min_gram_, max_gram_, &sink);
+            candidates.and_with(Bitmap(total_count, std::move(hits)));
+        }
+    } else {
+        auto sorted_terms =
+            wrapper_->ngram_tokenize(literals, min_gram_, max_gram_);
+        AssertInfo(!sorted_terms.empty(),
+                   "ngram_tokenize should not return empty for valid literal");
+        ApplyIterativeNgramFilter(sorted_terms, total_count, candidates);
+    }
+
+    if (auto root_span = tracer::GetRootSpan()) {
+        const auto post_count = candidates.count();
+        root_span->SetAttribute("phase1_op_type", static_cast<int>(op_type));
+        root_span->SetAttribute("phase1_literal_length",
+                                static_cast<int>(literal.length()));
+        root_span->SetAttribute("phase1_total_count",
+                                static_cast<int>(total_count));
+        root_span->SetAttribute(
+            "phase1_pre_hit_rate", 1.0 * pre_count / total_count);
+        root_span->SetAttribute(
+            "phase1_post_hit_rate", 1.0 * post_count / total_count);
         root_span->SetAttribute("phase1_use_batch_strategy",
                                 use_batch_strategy);
     }

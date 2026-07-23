@@ -97,15 +97,27 @@ class TextMatchIndex : public InvertedIndexTantivy<std::string> {
     TargetBitmap
     MatchQuery(const std::string& query, uint32_t min_should_match);
 
+    Bitmap
+    MatchQueryBitmap(const std::string& query, uint32_t min_should_match);
+
     TargetBitmap
     PhraseMatchQuery(const std::string& query, uint32_t slop);
+
+    Bitmap
+    PhraseMatchQueryBitmap(const std::string& query, uint32_t slop);
 
     TargetBitmap
     FuzzyMatchQuery(const std::string& query, uint32_t max_edit_distance);
 
+    Bitmap
+    FuzzyMatchQueryBitmap(const std::string& query, uint32_t max_edit_distance);
+
  private:
     TargetBitmap
     PrepareBitset();
+
+    size_t
+    PrepareQuery();
 
     bool
     shouldTriggerCommit();

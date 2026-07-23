@@ -760,6 +760,31 @@ BitmapIndex<T>::In(const size_t n, const T* values) {
 }
 
 template <typename T>
+Bitmap
+BitmapIndex<T>::InBitmap(const size_t n, const T* values) {
+    AssertInfo(is_built_, "index has not been built");
+    if (!is_mmap_ && build_mode_ == BitmapIndexBuildMode::BITSET) {
+        return ScalarIndex<T>::InBitmap(n, values);
+    }
+
+    roaring::Roaring result;
+    for (size_t i = 0; i < n; ++i) {
+        if (is_mmap_) {
+            auto it = bitmap_info_map_.find(values[i]);
+            if (it != bitmap_info_map_.end()) {
+                result |= it->second;
+            }
+        } else {
+            auto it = data_.find(values[i]);
+            if (it != data_.end()) {
+                result |= it->second;
+            }
+        }
+    }
+    return Bitmap(total_num_rows_, std::move(result));
+}
+
+template <typename T>
 const TargetBitmap
 BitmapIndex<T>::NotIn(const size_t n, const T* values) {
     tracer::AutoSpan span("BitmapIndex::NotIn", tracer::GetRootSpan());
@@ -809,6 +834,18 @@ BitmapIndex<T>::NotIn(const size_t n, const T* values) {
         res &= valid_bitset_;
         return res;
     }
+}
+
+template <typename T>
+Bitmap
+BitmapIndex<T>::NotInBitmap(const size_t n, const T* values) {
+    if (!is_mmap_ && build_mode_ == BitmapIndexBuildMode::BITSET) {
+        return ScalarIndex<T>::NotInBitmap(n, values);
+    }
+    auto result = InBitmap(n, values);
+    result.flip();
+    result.and_with(Bitmap(valid_bitset_));
+    return result;
 }
 
 template <typename T>
@@ -907,6 +944,45 @@ BitmapIndex<T>::Range(const T& value, OpType op) {
     } else {
         return std::move(RangeForBitset(value, op));
     }
+}
+
+template <typename T>
+Bitmap
+BitmapIndex<T>::RangeBitmap(const T& value, OpType op) {
+    if (!is_mmap_ && build_mode_ == BitmapIndexBuildMode::BITSET) {
+        return ScalarIndex<T>::RangeBitmap(value, op);
+    }
+    AssertInfo(is_built_, "index has not been built");
+    roaring::Roaring result;
+    auto matches = [&](const T& key) {
+        switch (op) {
+            case OpType::LessThan:
+                return key < value;
+            case OpType::LessEqual:
+                return key <= value;
+            case OpType::GreaterThan:
+                return key > value;
+            case OpType::GreaterEqual:
+                return key >= value;
+            default:
+                ThrowInfo(OpTypeInvalid,
+                          fmt::format("Invalid OperatorType: {}", op));
+        }
+    };
+    if (is_mmap_) {
+        for (const auto& [key, posting] : bitmap_info_map_) {
+            if (matches(key)) {
+                result |= posting;
+            }
+        }
+    } else {
+        for (const auto& [key, posting] : data_) {
+            if (matches(key)) {
+                result |= posting;
+            }
+        }
+    }
+    return Bitmap(total_num_rows_, std::move(result));
 }
 template <typename T>
 TargetBitmap
@@ -1112,6 +1188,45 @@ BitmapIndex<T>::Range(const T& lower_value,
         return RangeForBitset(
             lower_value, lb_inclusive, upper_value, ub_inclusive);
     }
+}
+
+template <typename T>
+Bitmap
+BitmapIndex<T>::RangeBitmap(const T& lower_value,
+                            bool lb_inclusive,
+                            const T& upper_value,
+                            bool ub_inclusive) {
+    if (!is_mmap_ && build_mode_ == BitmapIndexBuildMode::BITSET) {
+        return ScalarIndex<T>::RangeBitmap(
+            lower_value, lb_inclusive, upper_value, ub_inclusive);
+    }
+    AssertInfo(is_built_, "index has not been built");
+    roaring::Roaring result;
+    if (lower_value > upper_value ||
+        (lower_value == upper_value && !(lb_inclusive && ub_inclusive))) {
+        return Bitmap(total_num_rows_, std::move(result));
+    }
+    auto matches = [&](const T& key) {
+        const bool above =
+            lb_inclusive ? key >= lower_value : key > lower_value;
+        const bool below =
+            ub_inclusive ? key <= upper_value : key < upper_value;
+        return above && below;
+    };
+    if (is_mmap_) {
+        for (const auto& [key, posting] : bitmap_info_map_) {
+            if (matches(key)) {
+                result |= posting;
+            }
+        }
+    } else {
+        for (const auto& [key, posting] : data_) {
+            if (matches(key)) {
+                result |= posting;
+            }
+        }
+    }
+    return Bitmap(total_num_rows_, std::move(result));
 }
 
 template <typename T>

@@ -244,7 +244,7 @@ TextMatchIndex::Load(const Config& config) {
         GetValueFromConfig<bool>(config, ENABLE_MMAP).value_or(true);
 
     wrapper_ = std::make_shared<TantivyIndexWrapper>(
-        prefix.c_str(), load_in_mmap, milvus::index::SetBitsetSealed);
+        prefix.c_str(), load_in_mmap, milvus::index::SetHitsSealed);
 
     if (!load_in_mmap) {
         // the index is loaded in ram, so we can remove files in advance
@@ -369,7 +369,7 @@ TextMatchIndex::Reload() {
 
 void
 TextMatchIndex::CreateReader(SetBitsetFn set_bitset) {
-    wrapper_->create_reader(set_bitset);
+    wrapper_->create_reader(ToTantivyHitSinkCallback(set_bitset));
 }
 
 void
@@ -382,11 +382,16 @@ TextMatchIndex::RegisterAnalyzer(const char* analyzer_name,
 // the text-index query methods so the commit/reload logic lives in one place.
 TargetBitmap
 TextMatchIndex::PrepareBitset() {
+    return TargetBitmap{PrepareQuery()};
+}
+
+size_t
+TextMatchIndex::PrepareQuery() {
     if (shouldTriggerCommit()) {
         Commit();
         Reload();
     }
-    return TargetBitmap{static_cast<size_t>(Count())};
+    return static_cast<size_t>(Count());
 }
 
 TargetBitmap
@@ -394,8 +399,19 @@ TextMatchIndex::MatchQuery(const std::string& query,
                            uint32_t min_should_match) {
     tracer::AutoSpan span("TextMatchIndex::MatchQuery", tracer::GetRootSpan());
     TargetBitmap bitset = PrepareBitset();
-    wrapper_->match_query(query, min_should_match, &bitset);
+    auto sink = TantivyHitSink::Dense(bitset);
+    wrapper_->match_query(query, min_should_match, &sink);
     return bitset;
+}
+
+Bitmap
+TextMatchIndex::MatchQueryBitmap(const std::string& query,
+                                 uint32_t min_should_match) {
+    const auto count = PrepareQuery();
+    roaring::Roaring bitset;
+    auto sink = TantivyHitSink::Roaring(count, bitset);
+    wrapper_->match_query(query, min_should_match, &sink);
+    return Bitmap(count, std::move(bitset));
 }
 
 TargetBitmap
@@ -403,8 +419,19 @@ TextMatchIndex::PhraseMatchQuery(const std::string& query, uint32_t slop) {
     tracer::AutoSpan span("TextMatchIndex::PhraseMatchQuery",
                           tracer::GetRootSpan());
     TargetBitmap bitset = PrepareBitset();
-    wrapper_->phrase_match_query(query, slop, &bitset);
+    auto sink = TantivyHitSink::Dense(bitset);
+    wrapper_->phrase_match_query(query, slop, &sink);
     return bitset;
+}
+
+Bitmap
+TextMatchIndex::PhraseMatchQueryBitmap(const std::string& query,
+                                       uint32_t slop) {
+    const auto count = PrepareQuery();
+    roaring::Roaring bitset;
+    auto sink = TantivyHitSink::Roaring(count, bitset);
+    wrapper_->phrase_match_query(query, slop, &sink);
+    return Bitmap(count, std::move(bitset));
 }
 
 TargetBitmap
@@ -413,8 +440,19 @@ TextMatchIndex::FuzzyMatchQuery(const std::string& query,
     tracer::AutoSpan span("TextMatchIndex::FuzzyMatchQuery",
                           tracer::GetRootSpan());
     TargetBitmap bitset = PrepareBitset();
-    wrapper_->fuzzy_match_query(query, max_edit_distance, &bitset);
+    auto sink = TantivyHitSink::Dense(bitset);
+    wrapper_->fuzzy_match_query(query, max_edit_distance, &sink);
     return bitset;
+}
+
+Bitmap
+TextMatchIndex::FuzzyMatchQueryBitmap(const std::string& query,
+                                      uint32_t max_edit_distance) {
+    const auto count = PrepareQuery();
+    roaring::Roaring bitset;
+    auto sink = TantivyHitSink::Roaring(count, bitset);
+    wrapper_->fuzzy_match_query(query, max_edit_distance, &sink);
+    return Bitmap(count, std::move(bitset));
 }
 
 }  // namespace milvus::index

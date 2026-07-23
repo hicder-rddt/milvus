@@ -67,8 +67,8 @@ TEST(ExprResCacheManagerTest, PutGetBasic) {
 
     ExprResCacheManager::Key k{123, "expr:A"};
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(128));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(128));
     v.active_count = 128;
 
     mgr.Put(k, v);
@@ -105,8 +105,8 @@ TEST(ExprResCacheManagerTest, ClockEvictionByCapacity) {
     for (int i = 0; i < 20; ++i) {
         ExprResCacheManager::Key k{i + 1, "expr:x_" + std::to_string(i)};
         ExprResCacheManager::Value v;
-        v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(N));
-        v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(N));
+        v.result = std::make_shared<milvus::Bitmap>(MakeBits(N));
+        v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(N));
         v.active_count = static_cast<int64_t>(N);
         mgr.Put(k, v);
     }
@@ -138,8 +138,8 @@ TEST(ExprResCacheManagerTest, EraseSegment) {
     ExprResCacheManager::Key k2{10, "sig2"};
     ExprResCacheManager::Key k3{11, "sig3"};
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(64));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(64));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(64));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(64));
     v.active_count = 64;
     mgr.Put(k1, v);
     mgr.Put(k2, v);
@@ -175,8 +175,8 @@ TEST(ExprResCacheManagerTest, EnableDisable) {
     ExprResCacheManager::SetEnabled(false);
     ExprResCacheManager::Key k{7, "x"};
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(32));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(32));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(32));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(32));
     v.active_count = 32;
     mgr.Put(k, v);
 
@@ -220,9 +220,8 @@ class ExprResCacheManagerDiskTest : public ::testing::Test {
     ExprResCacheManager::Value
     MakeValue(size_t n_bits, int64_t active_count) {
         ExprResCacheManager::Value v;
-        v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(n_bits));
-        v.valid_result =
-            std::make_shared<milvus::TargetBitmap>(MakeBits(n_bits));
+        v.result = std::make_shared<milvus::Bitmap>(MakeBits(n_bits));
+        v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(n_bits));
         v.active_count = active_count;
         return v;
     }
@@ -354,8 +353,9 @@ MakeRandomBits(size_t n, double density, uint32_t seed = 42) {
 }
 
 // Helper: compare two bitsets bit-by-bit.
+template <typename Left, typename Right>
 void
-AssertBitsEqual(const milvus::TargetBitmap& a, const milvus::TargetBitmap& b) {
+AssertBitsEqual(const Left& a, const Right& b) {
     ASSERT_EQ(a.size(), b.size());
     for (size_t i = 0; i < a.size(); ++i) {
         ASSERT_EQ(bool(a[i]), bool(b[i])) << "bit " << i << " differs";
@@ -366,11 +366,11 @@ AssertBitsEqual(const milvus::TargetBitmap& a, const milvus::TargetBitmap& b) {
 
 TEST(CacheCompressorTest, LZ4RoundTrip) {
     const size_t n = 1024;
-    auto result = MakeBits(n, true);
-    auto valid = MakeBits(n, false);
+    milvus::Bitmap result(MakeBits(n, true), milvus::Bitmap::Backend::Dense);
+    milvus::Bitmap valid(MakeBits(n, false), milvus::Bitmap::Backend::Dense);
     // Set some bits in valid to make it non-trivial
     for (size_t i = 0; i < n; i += 3) {
-        valid[i] = true;
+        valid.set(i);
     }
 
     uint8_t comp_type = 0;
@@ -378,8 +378,8 @@ TEST(CacheCompressorTest, LZ4RoundTrip) {
     // result is all-1s → density=100% → RoaringInv
     ASSERT_NE(comp_type, kCompTypeRaw);
 
-    milvus::TargetBitmap out_result(0);
-    milvus::TargetBitmap out_valid(0);
+    milvus::Bitmap out_result;
+    milvus::Bitmap out_valid;
     CacheCompressor::Decompress(compressed.data(),
                                 static_cast<uint32_t>(compressed.size()),
                                 comp_type,
@@ -392,16 +392,18 @@ TEST(CacheCompressorTest, LZ4RoundTrip) {
 
 TEST(CacheCompressorTest, NoCompression) {
     const size_t n = 1024;
-    auto result = MakeRandomBits(n, 0.5, 1);
-    auto valid = MakeRandomBits(n, 0.5, 2);
+    milvus::Bitmap result(MakeRandomBits(n, 0.5, 1),
+                          milvus::Bitmap::Backend::Dense);
+    milvus::Bitmap valid(MakeRandomBits(n, 0.5, 2),
+                         milvus::Bitmap::Backend::Dense);
 
     uint8_t comp_type = 0;
     auto compressed =
         CacheCompressor::Compress(result, valid, false, comp_type);
     ASSERT_EQ(comp_type, kCompTypeRaw);
 
-    milvus::TargetBitmap out_result(0);
-    milvus::TargetBitmap out_valid(0);
+    milvus::Bitmap out_result;
+    milvus::Bitmap out_valid;
     CacheCompressor::Decompress(compressed.data(),
                                 static_cast<uint32_t>(compressed.size()),
                                 comp_type,
@@ -413,8 +415,10 @@ TEST(CacheCompressorTest, NoCompression) {
 }
 
 TEST(CacheCompressorTest, EmptyBitset) {
-    milvus::TargetBitmap result(0);
-    milvus::TargetBitmap valid(0);
+    milvus::Bitmap result(milvus::TargetBitmap(0),
+                          milvus::Bitmap::Backend::Dense);
+    milvus::Bitmap valid(milvus::TargetBitmap(0),
+                         milvus::Bitmap::Backend::Dense);
 
     // With compression enabled
     {
@@ -424,8 +428,8 @@ TEST(CacheCompressorTest, EmptyBitset) {
         // Empty bitsets should use raw (no data to compress)
         ASSERT_EQ(comp_type, kCompTypeRaw);
 
-        milvus::TargetBitmap out_result(0);
-        milvus::TargetBitmap out_valid(0);
+        milvus::Bitmap out_result;
+        milvus::Bitmap out_valid;
         CacheCompressor::Decompress(compressed.data(),
                                     static_cast<uint32_t>(compressed.size()),
                                     comp_type,
@@ -442,8 +446,8 @@ TEST(CacheCompressorTest, EmptyBitset) {
             CacheCompressor::Compress(result, valid, false, comp_type);
         ASSERT_EQ(comp_type, kCompTypeRaw);
 
-        milvus::TargetBitmap out_result(0);
-        milvus::TargetBitmap out_valid(0);
+        milvus::Bitmap out_result;
+        milvus::Bitmap out_valid;
         CacheCompressor::Decompress(compressed.data(),
                                     static_cast<uint32_t>(compressed.size()),
                                     comp_type,
@@ -456,10 +460,12 @@ TEST(CacheCompressorTest, EmptyBitset) {
 
 TEST(CacheCompressorTest, LargeBitset) {
     const size_t n = 1000000;  // 1M bits
-    auto result = MakeRandomBits(n, 0.01, 100);
-    auto valid = MakeBits(n, true);
+    milvus::Bitmap result(MakeRandomBits(n, 0.01, 100),
+                          milvus::Bitmap::Backend::Dense);
+    milvus::Bitmap valid(MakeBits(n, true), milvus::Bitmap::Backend::Dense);
 
-    const size_t raw_bytes = result.size_in_bytes() + valid.size_in_bytes();
+    const size_t raw_bytes =
+        result.to_dense().size_in_bytes() + valid.to_dense().size_in_bytes();
 
     uint8_t comp_type = 0;
     auto compressed = CacheCompressor::Compress(result, valid, true, comp_type);
@@ -469,8 +475,8 @@ TEST(CacheCompressorTest, LargeBitset) {
     // Compressed size should be smaller than raw
     ASSERT_LT(compressed.size(), raw_bytes);
 
-    milvus::TargetBitmap out_result(0);
-    milvus::TargetBitmap out_valid(0);
+    milvus::Bitmap out_result;
+    milvus::Bitmap out_valid;
     CacheCompressor::Decompress(compressed.data(),
                                 static_cast<uint32_t>(compressed.size()),
                                 comp_type,
@@ -487,8 +493,10 @@ TEST(CacheCompressorTest, VariousDensities) {
 
     for (double density : densities) {
         for (bool compress : {true, false}) {
-            auto result = MakeRandomBits(n, density, 77);
-            auto valid = MakeRandomBits(n, 1.0 - density, 88);
+            milvus::Bitmap result(MakeRandomBits(n, density, 77),
+                                  milvus::Bitmap::Backend::Dense);
+            milvus::Bitmap valid(MakeRandomBits(n, 1.0 - density, 88),
+                                 milvus::Bitmap::Backend::Dense);
 
             uint8_t comp_type = 0;
             auto compressed =
@@ -505,8 +513,8 @@ TEST(CacheCompressorTest, VariousDensities) {
                 ASSERT_EQ(comp_type, kCompTypeRaw) << "density=" << density;
             }
 
-            milvus::TargetBitmap out_result(0);
-            milvus::TargetBitmap out_valid(0);
+            milvus::Bitmap out_result;
+            milvus::Bitmap out_valid;
             CacheCompressor::Decompress(
                 compressed.data(),
                 static_cast<uint32_t>(compressed.size()),
@@ -522,15 +530,16 @@ TEST(CacheCompressorTest, VariousDensities) {
 
 TEST(CacheCompressorTest, CorruptPayloadReturnsFalse) {
     const size_t n = 1024;
-    auto result = MakeRandomBits(n, 0.01, 3);
-    auto valid = MakeBits(n, true);
+    milvus::Bitmap result(MakeRandomBits(n, 0.01, 3),
+                          milvus::Bitmap::Backend::Dense);
+    milvus::Bitmap valid(MakeBits(n, true), milvus::Bitmap::Backend::Dense);
 
     uint8_t comp_type = 0;
     auto compressed = CacheCompressor::Compress(result, valid, true, comp_type);
     ASSERT_EQ(comp_type, kCompTypeRoaring);
 
-    milvus::TargetBitmap out_result(0);
-    milvus::TargetBitmap out_valid(0);
+    milvus::Bitmap out_result;
+    milvus::Bitmap out_valid;
     ASSERT_FALSE(CacheCompressor::Decompress(
         compressed.data(), 10, comp_type, out_result, out_valid));
 
@@ -541,6 +550,31 @@ TEST(CacheCompressorTest, CorruptPayloadReturnsFalse) {
                                     comp_type,
                                     out_result,
                                     out_valid));
+}
+
+TEST(CacheCompressorTest, RoaringRoundTripPreservesBackendWhenDisabled) {
+    const size_t n = 70003;
+    milvus::Bitmap result(MakeRandomBits(n, 0.02, 17));
+    milvus::Bitmap valid(MakeRandomBits(n, 0.98, 18));
+    ASSERT_TRUE(result.is_roaring());
+    ASSERT_TRUE(valid.is_roaring());
+
+    uint8_t comp_type = 0;
+    auto compressed =
+        CacheCompressor::Compress(result, valid, false, comp_type);
+    ASSERT_EQ(comp_type, kCompTypeRoaring);
+
+    milvus::Bitmap out_result;
+    milvus::Bitmap out_valid;
+    ASSERT_TRUE(CacheCompressor::Decompress(compressed.data(),
+                                            compressed.size(),
+                                            comp_type,
+                                            out_result,
+                                            out_valid));
+    EXPECT_TRUE(out_result.is_roaring());
+    EXPECT_TRUE(out_valid.is_roaring());
+    AssertBitsEqual(result, out_result);
+    AssertBitsEqual(valid, out_valid);
 }
 
 // SegmentCacheFileTest::PerfBenchmark removed — V1 mmap backend replaced.
@@ -634,15 +668,16 @@ TEST(ExprResCacheManagerPerfTest, EndToEndAllDensities) {
                 keys.push_back(
                     {static_cast<int64_t>(i + 1), "sig_" + std::to_string(i)});
                 ExprResCacheManager::Value v;
-                v.result = std::make_shared<milvus::TargetBitmap>(
+                v.result = std::make_shared<milvus::Bitmap>(
                     MakeRandomBits(N_BITS, s.density, 42 + i));
-                v.valid_result = std::make_shared<milvus::TargetBitmap>(
-                    MakeBits(N_BITS, true));
+                v.valid_result =
+                    std::make_shared<milvus::Bitmap>(MakeBits(N_BITS, true));
                 v.active_count = static_cast<int64_t>(N_BITS);
                 values.push_back(v);
             }
-            size_t raw_bytes = values[0].result->size_in_bytes() +
-                               values[0].valid_result->size_in_bytes();
+            size_t raw_bytes =
+                values[0].result->to_dense().size_in_bytes() +
+                values[0].valid_result->to_dense().size_in_bytes();
 
             // Detect comp_type from first entry
             uint8_t detected_comp_type = 0;
@@ -759,10 +794,8 @@ TEST(ExprResCacheManagerPerfTest, EndToEndPutGet) {
     for (int i = 0; i < num_entries; ++i) {
         keys.push_back({1, "expr_perf_sig_" + std::to_string(i)});
         ExprResCacheManager::Value v;
-        v.result =
-            std::make_shared<milvus::TargetBitmap>(MakeRandomBits(N, 0.5, i));
-        v.valid_result =
-            std::make_shared<milvus::TargetBitmap>(MakeBits(N, true));
+        v.result = std::make_shared<milvus::Bitmap>(MakeRandomBits(N, 0.5, i));
+        v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(N, true));
         v.active_count = static_cast<int64_t>(N);
         values.push_back(v);
     }
@@ -867,8 +900,8 @@ TEST(ExprResCacheManagerTest, AdmissionThresholdSkipsOneOff) {
 
     ExprResCacheManager::Key k{100, "one_off_expr"};
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(128));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(128));
     v.active_count = 128;
 
     // First Put: rejected by frequency admission
@@ -901,8 +934,8 @@ TEST(ExprResCacheManagerTest, AdmissionThresholdOneIsDefault) {
 
     ExprResCacheManager::Key k{200, "any_expr"};
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(64));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(64));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(64));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(64));
     v.active_count = 64;
 
     mgr.Put(k, v);
@@ -928,8 +961,8 @@ TEST(ExprResCacheManagerTest, CostAdmissionSkipsFastExpressions) {
     mgr.SetDiskConfig(tmpdir.string(), 1ULL << 20, 1ULL << 20, true, 1, 100);
 
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(128));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(128));
     v.active_count = 128;
 
     // Fast expression (50μs < 100μs threshold): rejected
@@ -1012,7 +1045,7 @@ TEST(CompressionBenchmark, RoaringVsLZ4) {
             std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
                 .count();
 
-        TargetBitmap lz4_out_result(0), lz4_out_valid(0);
+        Bitmap lz4_out_result, lz4_out_valid;
         t0 = std::chrono::high_resolution_clock::now();
         CacheCompressor::Decompress(lz4_buf.data(),
                                     lz4_buf.size(),
@@ -1506,7 +1539,7 @@ TEST(EntryPoolV2Test, PutGetBasic) {
     ASSERT_EQ(pool.GetEntryCount(), 1u);
     ASSERT_GT(pool.GetCurrentBytes(), 0u);
 
-    milvus::TargetBitmap out_result, out_valid;
+    milvus::Bitmap out_result, out_valid;
     bool hit = pool.Get(/*segment_id=*/100,
                         /*signature=*/"age > 30 AND status == 1",
                         /*active_count=*/N,
@@ -1520,6 +1553,33 @@ TEST(EntryPoolV2Test, PutGetBasic) {
         ASSERT_EQ(bool(out_result[i]), bool(result[i])) << "result bit " << i;
         ASSERT_EQ(bool(out_valid[i]), bool(valid[i])) << "valid bit " << i;
     }
+}
+
+TEST(EntryPoolV2Test, PreservesRoaringAndReturnsIndependentValues) {
+    milvus::exec::EntryPool pool(1 << 20);
+    const size_t n = 70003;
+    milvus::Bitmap result(MakeRandomBits(n, 0.01, 91));
+    milvus::Bitmap valid(MakeBits(n, true));
+    ASSERT_TRUE(result.is_roaring());
+    ASSERT_TRUE(valid.is_roaring());
+
+    pool.Put(101, "roaring_expr", n, result, valid);
+
+    milvus::Bitmap first_result, first_valid;
+    ASSERT_TRUE(pool.Get(101, "roaring_expr", n, first_result, first_valid));
+    ASSERT_TRUE(first_result.is_roaring());
+    ASSERT_TRUE(first_valid.is_roaring());
+    AssertBitsEqual(result, first_result);
+    AssertBitsEqual(valid, first_valid);
+
+    const bool stored_bit = result.test(0);
+    first_result.set(0, !stored_bit);
+
+    milvus::Bitmap second_result, second_valid;
+    ASSERT_TRUE(pool.Get(101, "roaring_expr", n, second_result, second_valid));
+    EXPECT_EQ(second_result.test(0), stored_bit);
+    EXPECT_TRUE(second_result.is_roaring());
+    EXPECT_TRUE(second_valid.is_roaring());
 }
 
 TEST(EntryPoolV2Test, SignatureExactMatch) {
@@ -1538,7 +1598,7 @@ TEST(EntryPoolV2Test, SignatureExactMatch) {
     pool.Put(100, "expr_B", N, result_b, valid_b);
 
     // Both should be retrievable independently
-    milvus::TargetBitmap out_r, out_v;
+    milvus::Bitmap out_r, out_v;
 
     ASSERT_TRUE(pool.Get(100, "expr_A", N, out_r, out_v));
     ASSERT_EQ(out_r.size(), N);
@@ -1568,7 +1628,7 @@ TEST(EntryPoolV2Test, ActiveCountStaleness) {
 
     pool.Put(100, "expr_stale", /*active_count=*/N, result, valid);
 
-    milvus::TargetBitmap out_r, out_v;
+    milvus::Bitmap out_r, out_v;
 
     // Correct active_count → hit
     ASSERT_TRUE(pool.Get(100, "expr_stale", N, out_r, out_v));
@@ -1599,7 +1659,7 @@ TEST(EntryPoolV2Test, SameSignatureActiveCountCreatesDistinctSnapshots) {
              new_valid,
              /*eval_duration_us=*/1);
 
-    milvus::TargetBitmap out_r, out_v;
+    milvus::Bitmap out_r, out_v;
     ASSERT_TRUE(pool.Get(100, "expr_replace", old_n, out_r, out_v));
     ASSERT_EQ(out_r.size(), old_n);
     for (size_t i = 0; i < old_n; ++i) {
@@ -1681,7 +1741,7 @@ TEST(EntryPoolV2Test, EraseSegment) {
     ASSERT_EQ(pool.GetEntryCount(), 1u);
 
     // Segment 200 entries should still be accessible
-    milvus::TargetBitmap out_r, out_v;
+    milvus::Bitmap out_r, out_v;
     ASSERT_TRUE(pool.Get(200, "seg200_expr1", N, out_r, out_v));
 
     // Segment 100 entries should be gone
@@ -2046,8 +2106,8 @@ TEST(ExprResCacheManagerV2Test, MemoryModePutGet) {
     // Put an entry
     ExprResCacheManager::Key k{100, "mem_mode_sig"};
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(512));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(512));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(512));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(512));
     v.active_count = 512;
     v.eval_duration_us = 0;
     mgr.Put(k, v);
@@ -2088,8 +2148,8 @@ TEST(ExprResCacheManagerV2Test, MemoryModeActiveCountRefreshesSnapshot) {
 
     ExprResCacheManager::Key k{101, "mem_growing_sig"};
     ExprResCacheManager::Value v1;
-    v1.result = std::make_shared<milvus::TargetBitmap>(MakeBits(128, false));
-    v1.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
+    v1.result = std::make_shared<milvus::Bitmap>(MakeBits(128, false));
+    v1.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(128));
     v1.active_count = 128;
     mgr.Put(k, v1);
 
@@ -2098,8 +2158,8 @@ TEST(ExprResCacheManagerV2Test, MemoryModeActiveCountRefreshesSnapshot) {
     ASSERT_TRUE(mgr.Get(k, got));
 
     ExprResCacheManager::Value v2;
-    v2.result = std::make_shared<milvus::TargetBitmap>(MakeBits(256, true));
-    v2.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(256));
+    v2.result = std::make_shared<milvus::Bitmap>(MakeBits(256, true));
+    v2.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(256));
     v2.active_count = 256;
     v2.eval_duration_us = 1;
     mgr.Put(k, v2);
@@ -2135,9 +2195,8 @@ TEST(ExprResCacheManagerV2Test, DiskModePutGet) {
 
     ExprResCacheManager::Key k{200, "disk_mode_sig"};
     ExprResCacheManager::Value v;
-    v.result =
-        std::make_shared<milvus::TargetBitmap>(MakeRandomBits(N, 0.5, 42));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(N));
+    v.result = std::make_shared<milvus::Bitmap>(MakeRandomBits(N, 0.5, 42));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(N));
     v.active_count = static_cast<int64_t>(N);
     v.eval_duration_us = 0;
 
@@ -2194,8 +2253,8 @@ TEST(ExprResCacheManagerV2Test, DiskModeFrequencyAdmission) {
 
     ExprResCacheManager::Key k{250, "disk_freq_sig"};
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(128));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(128));
     v.active_count = 128;
     v.eval_duration_us = 0;
 
@@ -2237,8 +2296,8 @@ TEST(ExprResCacheManagerV2Test, DiskModeEraseSegment) {
     ExprResCacheManager::Key k1{300, "erase_sig1"};
     ExprResCacheManager::Key k2{301, "erase_sig2"};
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(256));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(256));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(256));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(256));
     v.active_count = 256;
     mgr.Put(k1, v);
     mgr.Put(k2, v);
@@ -2287,8 +2346,8 @@ TEST(ExprResCacheManagerV2Test, DiskModeGlobalCapacityEvictsSegments) {
     mgr.SetConfig(cfg);
 
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(1024));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(1024));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(1024));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(1024));
     v.active_count = 1024;
     v.eval_duration_us = 0;
 
@@ -2335,8 +2394,8 @@ TEST(ExprResCacheManagerV2Test, DiskModeGlobalCapacityUsesSegmentClock) {
     mgr.SetConfig(cfg);
 
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(1024));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(1024));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(1024));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(1024));
     v.active_count = 1024;
     v.eval_duration_us = 0;
 
@@ -2384,8 +2443,8 @@ TEST(ExprResCacheManagerV2Test, ModeSwitch) {
 
     ExprResCacheManager::Key k{400, "mode_switch_sig"};
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(128));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(128));
     v.active_count = 128;
     mgr.Put(k, v);
 
@@ -2502,8 +2561,8 @@ TEST(ExprResCacheManagerV2Test, DiskModeLatencyFilter) {
     mgr.SetConfig(cfg);
 
     ExprResCacheManager::Value v;
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(128));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(128));
     v.active_count = 128;
 
     // Fast expression (100us < 200us threshold): rejected
@@ -2523,8 +2582,8 @@ TEST(ExprResCacheManagerV2Test, DiskModeLatencyFilter) {
 
     // Existing same-row-count entry must be replaceable even if the recompute is
     // below the current latency admission threshold.
-    v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(128, false));
-    v.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
+    v.result = std::make_shared<milvus::Bitmap>(MakeBits(128, false));
+    v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(128));
     v.eval_duration_us = 1;
     mgr.Put(k2, v);
     got.active_count = 128;
@@ -2563,8 +2622,8 @@ TEST(ExprResCacheManagerV2Test, DiskModeRowCountChangeSkipsGrowingSegment) {
 
     ExprResCacheManager::Key k1{550, "row_count_128"};
     ExprResCacheManager::Value v1;
-    v1.result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
-    v1.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(128));
+    v1.result = std::make_shared<milvus::Bitmap>(MakeBits(128));
+    v1.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(128));
     v1.active_count = 128;
     mgr.Put(k1, v1);
 
@@ -2574,8 +2633,8 @@ TEST(ExprResCacheManagerV2Test, DiskModeRowCountChangeSkipsGrowingSegment) {
 
     ExprResCacheManager::Key k2{550, "row_count_256"};
     ExprResCacheManager::Value v2;
-    v2.result = std::make_shared<milvus::TargetBitmap>(MakeBits(256));
-    v2.valid_result = std::make_shared<milvus::TargetBitmap>(MakeBits(256));
+    v2.result = std::make_shared<milvus::Bitmap>(MakeBits(256));
+    v2.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(256));
     v2.active_count = 256;
     mgr.Put(k2, v2);
 
@@ -2639,9 +2698,8 @@ TEST(ExprResCacheManagerV2Test, ConcurrentSetConfigAndGetPut) {
             ExprResCacheManager::Key key{
                 700 + (i % 8), "concurrent_sig_" + std::to_string(i % 16)};
             ExprResCacheManager::Value v;
-            v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(256));
-            v.valid_result =
-                std::make_shared<milvus::TargetBitmap>(MakeBits(256));
+            v.result = std::make_shared<milvus::Bitmap>(MakeBits(256));
+            v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(256));
             v.active_count = 256;
             v.eval_duration_us = 0;
 
@@ -2672,9 +2730,8 @@ TEST(ExprResCacheManagerV2Test, ConcurrentSetConfigAndGetPut) {
 
     ExprResCacheManager::Key final_key{999, "final_sig"};
     ExprResCacheManager::Value final_v;
-    final_v.result = std::make_shared<milvus::TargetBitmap>(MakeBits(256));
-    final_v.valid_result =
-        std::make_shared<milvus::TargetBitmap>(MakeBits(256));
+    final_v.result = std::make_shared<milvus::Bitmap>(MakeBits(256));
+    final_v.valid_result = std::make_shared<milvus::Bitmap>(MakeBits(256));
     final_v.active_count = 256;
     final_v.eval_duration_us = 0;
     mgr.Put(final_key, final_v);
@@ -2777,16 +2834,17 @@ TEST(ExprResCacheV2PerfTest, EndToEndBothModes) {
                 keys.push_back(k);
 
                 ExprResCacheManager::Value v;
-                v.result = std::make_shared<milvus::TargetBitmap>(
+                v.result = std::make_shared<milvus::Bitmap>(
                     MakeRandomBits(N_BITS, s.density, 42 + i));
-                v.valid_result = std::make_shared<milvus::TargetBitmap>(
-                    MakeBits(N_BITS, true));
+                v.valid_result =
+                    std::make_shared<milvus::Bitmap>(MakeBits(N_BITS, true));
                 v.active_count = static_cast<int64_t>(N_BITS);
                 v.eval_duration_us = 5000;  // 5ms pretend eval time
                 values.push_back(v);
             }
-            size_t raw_bytes = values[0].result->size_in_bytes() +
-                               values[0].valid_result->size_in_bytes();
+            size_t raw_bytes =
+                values[0].result->to_dense().size_in_bytes() +
+                values[0].valid_result->to_dense().size_in_bytes();
 
             // Put benchmark
             auto t0 = std::chrono::high_resolution_clock::now();

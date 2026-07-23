@@ -275,6 +275,9 @@ class BitmapIndexTest : public testing::Test {
         }
         auto index_ptr = dynamic_cast<index::BitmapIndex<T>*>(index_.get());
         auto bitset = index_ptr->In(test_data.size(), test_data.data());
+        auto bitmap_result =
+            index_ptr->InBitmap(test_data.size(), test_data.data()).to_dense();
+        EXPECT_TRUE(bitmap_result == bitset);
         size_t start = 0;
         if (has_lack_binlog_row_) {
             for (int i = 0; i < lack_binlog_row_; i++) {
@@ -310,6 +313,10 @@ class BitmapIndexTest : public testing::Test {
         }
         auto index_ptr = dynamic_cast<index::BitmapIndex<T>*>(index_.get());
         auto bitset = index_ptr->NotIn(test_data.size(), test_data.data());
+        auto bitmap_result = index_ptr
+                                 ->NotInBitmap(test_data.size(), test_data.data())
+                                 .to_dense();
+        EXPECT_TRUE(bitmap_result == bitset);
         size_t start = 0;
         if (has_lack_binlog_row_) {
             for (int i = 0; i < lack_binlog_row_; i++) {

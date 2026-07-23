@@ -27,7 +27,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "common/Types.h"
+#include "common/BitmapVector.h"
 #include "log/Log.h"
 
 namespace milvus {
@@ -132,10 +132,10 @@ class ExprResCacheManager {
     };
 
     struct Value {
-        std::shared_ptr<TargetBitmap> result;        // filter result bits
-        std::shared_ptr<TargetBitmap> valid_result;  // valid bits
-        int64_t active_count{0};                     // active count when cached
-        size_t bytes{0};  // approximate size in bytes
+        std::shared_ptr<Bitmap> result;        // filter result bits
+        std::shared_ptr<Bitmap> valid_result;  // valid bits
+        int64_t active_count{0};               // active count when cached
+        size_t bytes{0};                       // approximate size in bytes
         int64_t eval_duration_us{
             0};  // eval duration in us, 0 = skip cost check
     };

@@ -153,11 +153,7 @@ ComputeScorerScores(exec::ExecContext* exec_context,
                    "offsets size: {}, filter: {}",
                    offsets.size(),
                    filter->ToString());
-        auto col_vec = std::dynamic_pointer_cast<ColumnVector>(results[0]);
-        AssertInfo(col_vec != nullptr,
-                   "ComputeScorerScores: failed to cast result to "
-                   "ColumnVector, filter: {}",
-                   filter->ToString());
+        auto col_vec = exec::GetColumnVector(results[0]);
         auto col_vec_size = col_vec->size();
         TargetBitmapView bitsetview(col_vec->GetRawData(), col_vec_size);
         // Fold UNKNOWN (NULL) into FALSE (data &= valid) so a null row

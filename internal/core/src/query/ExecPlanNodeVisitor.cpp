@@ -20,6 +20,7 @@
 #include "common/Tracer.h"
 #include "common/protobuf_utils.h"
 #include "exec/Task.h"
+#include "exec/expression/Utils.h"
 #include "fmt/core.h"
 #include "glog/logging.h"
 #include "google/protobuf/message.h"
@@ -65,10 +66,7 @@ ExecPlanNodeVisitor::ExecuteTask(
         auto result = task->Next();
         if (!result) {
             if (ret && !ret->childrens().empty()) {
-                auto first_column =
-                    std::dynamic_pointer_cast<ColumnVector>(ret->child(0));
-                AssertInfo(first_column,
-                           "first column must be a column vector");
+                auto first_column = milvus::exec::GetColumnVector(ret);
                 if (first_column->IsBitmap()) {
                     if (query_context->bitset_is_element_level()) {
                         Assert(processed_num ==
@@ -333,10 +331,7 @@ ExecPlanNodeVisitor::setupRetrieveResult(
     }
     AssertInfo(!result->childrens().empty(),
                "Result row vector must have at least one column");
-    auto first_column =
-        std::dynamic_pointer_cast<ColumnVector>(result->child(0));
-    AssertInfo(first_column,
-               "children inside row vector must be of column vector for now");
+    auto first_column = milvus::exec::GetColumnVector(result);
     tmp_retrieve_result.total_data_cnt_ = first_column->size();
     if (first_column->IsBitmap()) {
         BitsetTypeView view(first_column->GetRawData(), first_column->size());
@@ -457,9 +452,11 @@ ExecPlanNodeVisitor::visit(VectorPlanNode& node) {
             auto result = ExecuteTask(plan_fragment, query_context);
 
             if (result != nullptr && !result->childrens().empty()) {
-                auto col_vec = std::dynamic_pointer_cast<ColumnVector>(
-                    result->childrens()[0]);
-                if (col_vec != nullptr) {
+                if (auto roaring_vec =
+                        milvus::exec::GetBitmapVector(result)) {
+                    valid_count = active_count - roaring_vec->count();
+                } else if (auto col_vec =
+                               milvus::exec::GetColumnVector(result)) {
                     BitsetTypeView view(col_vec->GetRawData(), col_vec->size());
                     // Bitset convention: bit=1 means the row is filtered OUT
                     // (excluded). So valid rows = total active rows minus the

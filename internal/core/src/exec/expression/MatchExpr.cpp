@@ -314,10 +314,7 @@ PhyMatchFilterExpr::Eval(EvalCtx& context, VectorPtr& result) {
         }
         return;
     }
-    auto match_result_col_vec =
-        std::dynamic_pointer_cast<ColumnVector>(match_result);
-    AssertInfo(match_result_col_vec != nullptr,
-               "Match result should be ColumnVector");
+    auto match_result_col_vec = GetColumnVector(match_result);
     AssertInfo(match_result_col_vec->IsBitmap(),
                "Match result should be bitmap");
     AssertInfo(match_result_col_vec->size() == elem_count,

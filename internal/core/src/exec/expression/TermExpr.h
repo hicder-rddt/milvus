@@ -46,9 +46,9 @@ struct TermIndexFunc {
         conditional_t<std::is_same_v<T, std::string_view>, std::string, T>
             IndexInnerType;
     using Index = index::ScalarIndex<IndexInnerType>;
-    TargetBitmap
+    Bitmap
     operator()(Index* index, size_t n, const IndexInnerType* val) {
-        return index->In(n, val);
+        return index->InBitmap(n, val);
     }
 };
 

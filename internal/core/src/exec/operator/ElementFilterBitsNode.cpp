@@ -214,11 +214,7 @@ PhyElementFilterBitsNode::EvaluateElementExpression(
                    "ElementFilterBitsNode: expression evaluation should return "
                    "exactly one result");
 
-        auto col_vec = std::dynamic_pointer_cast<ColumnVector>(results[0]);
-        if (!col_vec) {
-            ThrowInfo(UnexpectedError,
-                      "ElementFilterBitsNode result should be ColumnVector");
-        }
+        auto col_vec = GetColumnVector(results[0]);
         if (!col_vec->IsBitmap()) {
             ThrowInfo(UnexpectedError,
                       "ElementFilterBitsNode result should be bitmap");
@@ -256,7 +252,7 @@ PhyElementFilterBitsNode::EvaluateElementExpression(
 
         EvalCtx eval_ctx(operator_context_->get_exec_context());
 
-        TargetBitmap eval_bitset;
+        Bitmap eval_bitset(total_elements, false);
         int64_t num_processed_elements = 0;
         std::vector<VectorPtr> results;
 
@@ -268,26 +264,32 @@ PhyElementFilterBitsNode::EvaluateElementExpression(
                        "should return "
                        "exactly one result");
 
-            auto col_vec = std::dynamic_pointer_cast<ColumnVector>(results[0]);
-            if (!col_vec) {
-                ThrowInfo(
-                    UnexpectedError,
-                    "ElementFilterBitsNode result should be ColumnVector");
-            }
-            if (!col_vec->IsBitmap()) {
-                ThrowInfo(UnexpectedError,
-                          "ElementFilterBitsNode result should be bitmap");
+            auto bitmap_vec = GetBitmapVector(results[0]);
+            if (bitmap_vec == nullptr) {
+                auto col_vec = GetColumnVector(results[0]);
+                if (!col_vec->IsBitmap()) {
+                    ThrowInfo(UnexpectedError,
+                              "ElementFilterBitsNode result should be bitmap");
+                }
+                bitmap_vec = BitmapVector::FromColumnVector(col_vec);
             }
 
-            auto col_vec_size = col_vec->size();
-            TargetBitmapView view(col_vec->GetRawData(), col_vec_size);
-            eval_bitset.append(view);
-            num_processed_elements += col_vec_size;
+            AssertInfo(
+                num_processed_elements + bitmap_vec->size() <= total_elements,
+                "ElementFilterBitsNode result exceeds element count: "
+                "batch end {} vs {}",
+                num_processed_elements + bitmap_vec->size(),
+                total_elements);
+            bitmap_vec->result().iterate([&](size_t value) {
+                eval_bitset.set(num_processed_elements + value);
+                return true;
+            });
+            num_processed_elements += bitmap_vec->size();
         }
 
-        AssertInfo(eval_bitset.size() == total_elements,
+        AssertInfo(num_processed_elements == total_elements,
                    "ElementFilterBitsNode result size mismatch: {} vs {}",
-                   eval_bitset.size(),
+                   num_processed_elements,
                    total_elements);
 
         // Convert doc_bitset to element bitset
@@ -297,7 +299,7 @@ PhyElementFilterBitsNode::EvaluateElementExpression(
         // AND expression result with element bitset from doc filter
         // eval_bitset: true means element matches expression
         // elem_bitset: true means element's doc passed predicate filter
-        eval_bitset &= elem_bitset;
+        eval_bitset.and_with(Bitmap(std::move(elem_bitset)));
 
         eval_bitset.flip();
 
@@ -311,7 +313,7 @@ PhyElementFilterBitsNode::EvaluateElementExpression(
         // individual elements inside an array do not support null values.
         // Therefore, the element-level valid_bitset is always all true.
         TargetBitmap valid_bitset(total_elements, true);
-        return std::make_pair(std::move(eval_bitset), std::move(valid_bitset));
+        return std::make_pair(eval_bitset.to_dense(), std::move(valid_bitset));
     }
 }
 

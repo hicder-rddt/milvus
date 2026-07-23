@@ -38,6 +38,7 @@
 #include "storage/Types.h"
 #include "storage/DataCodec.h"
 #include "log/Log.h"
+#include "tantivy-binding.h"
 
 namespace milvus::index {
 
@@ -261,6 +262,66 @@ void inline SetBitsetGrowing(void* bitset,
         }
         (*bitmap)[id] = true;
     }
+}
+
+struct TantivyHitSink {
+    enum class Kind { Dense, Roaring };
+
+    static TantivyHitSink
+    Dense(TargetBitmap& bitmap) {
+        return {Kind::Dense, bitmap.size(), &bitmap};
+    }
+
+    static TantivyHitSink
+    Roaring(size_t size, roaring::Roaring& bitmap) {
+        return {Kind::Roaring, size, &bitmap};
+    }
+
+    Kind kind;
+    size_t size;
+    void* ptr;
+};
+
+void inline SetHitsSealed(void* sink_ptr, const uint32_t* doc_id, uintptr_t n) {
+    auto* sink = static_cast<TantivyHitSink*>(sink_ptr);
+    if (sink->kind == TantivyHitSink::Kind::Dense) {
+        auto* bitmap = static_cast<TargetBitmap*>(sink->ptr);
+        for (uintptr_t i = 0; i < n; ++i) {
+            assert(doc_id[i] < sink->size);
+            (*bitmap)[doc_id[i]] = true;
+        }
+        return;
+    }
+    auto* bitmap = static_cast<roaring::Roaring*>(sink->ptr);
+    bitmap->addMany(n, doc_id);
+}
+
+void inline SetHitsGrowing(void* sink_ptr,
+                           const uint32_t* doc_id,
+                           uintptr_t n) {
+    auto* sink = static_cast<TantivyHitSink*>(sink_ptr);
+    if (sink->kind == TantivyHitSink::Kind::Dense) {
+        auto* bitmap = static_cast<TargetBitmap*>(sink->ptr);
+        for (uintptr_t i = 0; i < n; ++i) {
+            if (doc_id[i] < sink->size) {
+                (*bitmap)[doc_id[i]] = true;
+            }
+        }
+        return;
+    }
+    auto* bitmap = static_cast<roaring::Roaring*>(sink->ptr);
+    for (uintptr_t i = 0; i < n; ++i) {
+        if (doc_id[i] < sink->size) {
+            bitmap->add(doc_id[i]);
+        }
+    }
+}
+
+inline SetBitsetFn
+ToTantivyHitSinkCallback(SetBitsetFn callback) {
+    return callback == SetBitsetGrowing || callback == SetHitsGrowing
+               ? SetHitsGrowing
+               : SetHitsSealed;
 }
 
 // Get the SSO (Small String Optimization) threshold for std::string.

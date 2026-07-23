@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "common/EasyAssert.h"
+#include "common/BitmapVector.h"
 #include "common/Tracer.h"
 #include "common/Types.h"
 #include "exec/QueryContext.h"
@@ -73,6 +74,20 @@ ConvertPredicateToFilteredBitset(TargetBitmapView data,
     data.inplace_or(invalid, size);
     valid.set();
     return false;
+}
+
+bool
+ConvertPredicateToFilteredBitset(BitmapVector& bitmap) {
+    const bool all_valid = bitmap.valid_values_all_valid();
+    // FilterBits is the semantic boundary where result=TRUE changes from
+    // "predicate matched" to "row is excluded":
+    // excluded = ~result | ~validity.
+    bitmap.result().flip();
+    auto invalid = bitmap.validity().clone();
+    invalid.flip();
+    bitmap.result().or_with(invalid);
+    bitmap.validity().set_all();
+    return all_valid;
 }
 
 PhyFilterBitsNode::PhyFilterBitsNode(
@@ -152,6 +167,19 @@ PhyFilterBitsNode::GetOutput() {
                                cache_segment != nullptr &&
                                cache_segment->type() == SegmentType::Sealed &&
                                ExprResCacheManager::IsEnabled();
+    const auto put_cache = [&](const std::shared_ptr<BitmapVector>& bitmap) {
+        if (!can_use_cache) {
+            return;
+        }
+        ExprResCacheManager::Key key{cache_segment->get_segment_id(),
+                                     expr_cache_key_};
+        ExprResCacheManager::Value value;
+        value.result = std::make_shared<Bitmap>(bitmap->result().clone());
+        value.valid_result =
+            std::make_shared<Bitmap>(bitmap->validity().clone());
+        value.active_count = need_process_rows_;
+        ExprResCacheManager::Instance().Put(key, value);
+    };
     if (can_use_cache) {
         ExprResCacheManager::Key key{cache_segment->get_segment_id(),
                                      expr_cache_key_};
@@ -161,12 +189,11 @@ PhyFilterBitsNode::GetOutput() {
             cached.result != nullptr &&
             cached.result->size() == need_process_rows_) {
             num_processed_rows_ = need_process_rows_;
-            std::vector<VectorPtr> col_res;
-            col_res.push_back(std::make_shared<ColumnVector>(
-                cached.result->clone(),
-                cached.valid_result ? cached.valid_result->clone()
-                                    : TargetBitmap(need_process_rows_, true)));
-            return std::make_shared<RowVector>(col_res);
+            auto valid = cached.valid_result ? cached.valid_result->clone()
+                                             : Bitmap(need_process_rows_, true);
+            return std::make_shared<RowVector>(
+                std::vector<VectorPtr>{std::make_shared<BitmapVector>(
+                    cached.result->clone(), std::move(valid))});
         }
     }
 
@@ -181,8 +208,8 @@ PhyFilterBitsNode::GetOutput() {
 
     EvalCtx eval_ctx(operator_context_->get_exec_context());
 
-    TargetBitmap bitset;
-    TargetBitmap valid_bitset;
+    Bitmap bitset;
+    Bitmap valid_bitset;
 
     // optimization: if all expressions can be executed at once,
     // execute in a single pass and flip in-place to avoid bitmap copies.
@@ -194,33 +221,22 @@ PhyFilterBitsNode::GetOutput() {
         AssertInfo(results_.size() == 1 && results_[0] != nullptr,
                    "PhyFilterBitsNode result size should be size one and not "
                    "be nullptr");
-        auto col_vec = std::dynamic_pointer_cast<ColumnVector>(results_[0]);
-        AssertInfo(col_vec && col_vec->IsBitmap(),
-                   "PhyFilterBitsNode result should be bitmap ColumnVector");
+        auto bitmap_vec = GetBitmapVector(results_[0]);
+        if (!bitmap_vec) {
+            auto col_vec = GetColumnVector(results_[0]);
+            AssertInfo(col_vec->IsBitmap(),
+                       "PhyFilterBitsNode result should be bitmap vector");
+            bitmap_vec = BitmapVector::FromColumnVector(col_vec);
+        }
+        ConvertPredicateToFilteredBitset(*bitmap_vec);
+        num_processed_rows_ = bitmap_vec->size();
 
-        auto col_vec_size = col_vec->size();
-        TargetBitmapView view(col_vec->GetRawData(), col_vec_size);
-        TargetBitmapView valid_view(col_vec->GetValidRawData(), col_vec_size);
-        ConvertPredicateToFilteredBitset(view, valid_view, col_vec_size);
-        num_processed_rows_ = col_vec_size;
-
-        AssertInfo(col_vec_size == need_process_rows_,
+        AssertInfo(bitmap_vec->size() == need_process_rows_,
                    "bitset size: {}, need_process_rows_: {}",
-                   col_vec_size,
+                   bitmap_vec->size(),
                    need_process_rows_);
 
-        if (can_use_cache) {
-            ExprResCacheManager::Key key{cache_segment->get_segment_id(),
-                                         expr_cache_key_};
-            ExprResCacheManager::Value v;
-            v.result = std::make_shared<TargetBitmap>(view);
-            v.valid_result = std::make_shared<TargetBitmap>(valid_view);
-            v.active_count = need_process_rows_;
-            ExprResCacheManager::Instance().Put(key, v);
-        }
-
-        std::vector<VectorPtr> col_res;
-        col_res.push_back(std::move(results_[0]));
+        put_cache(bitmap_vec);
 
         std::chrono::high_resolution_clock::time_point scalar_end =
             std::chrono::high_resolution_clock::now();
@@ -230,7 +246,8 @@ PhyFilterBitsNode::GetOutput() {
         milvus::monitor::internal_core_search_latency_scalar.Observe(
             scalar_cost / 1000);
 
-        return std::make_shared<RowVector>(col_res);
+        return std::make_shared<RowVector>(
+            std::vector<VectorPtr>{std::move(bitmap_vec)});
     }
 
     while (num_processed_rows_ < need_process_rows_) {
@@ -240,53 +257,33 @@ PhyFilterBitsNode::GetOutput() {
                    "PhyFilterBitsNode result size should be size one and not "
                    "be nullptr");
 
-        if (auto col_vec =
-                std::dynamic_pointer_cast<ColumnVector>(results_[0])) {
-            if (col_vec->IsBitmap()) {
-                auto col_vec_size = col_vec->size();
-                TargetBitmapView view(col_vec->GetRawData(), col_vec_size);
-                bitset.append(view);
-                TargetBitmapView valid_view(col_vec->GetValidRawData(),
-                                            col_vec_size);
-                valid_bitset.append(valid_view);
-                num_processed_rows_ += col_vec_size;
-            } else {
+        auto bitmap_vec = GetBitmapVector(results_[0]);
+        if (!bitmap_vec) {
+            auto col_vec = GetColumnVector(results_[0]);
+            if (!col_vec->IsBitmap()) {
                 ThrowInfo(UnexpectedError,
                           "PhyFilterBitsNode result should be bitmap");
             }
-        } else {
-            ThrowInfo(UnexpectedError,
-                      "PhyFilterBitsNode result should be ColumnVector");
+            bitmap_vec = BitmapVector::FromColumnVector(col_vec);
         }
+        bitset.append(bitmap_vec->result());
+        valid_bitset.append(bitmap_vec->validity());
+        num_processed_rows_ += bitmap_vec->size();
     }
-    TargetBitmapView bitset_view(bitset);
-    TargetBitmapView valid_bitset_view(valid_bitset);
-    ConvertPredicateToFilteredBitset(
-        bitset_view, valid_bitset_view, bitset.size());
+    auto bitmap_vec = std::make_shared<BitmapVector>(std::move(bitset),
+                                                     std::move(valid_bitset));
+    ConvertPredicateToFilteredBitset(*bitmap_vec);
 
-    AssertInfo(bitset.size() == need_process_rows_,
+    AssertInfo(bitmap_vec->size() == need_process_rows_,
                "bitset size: {}, need_process_rows_: {}",
-               bitset.size(),
+               bitmap_vec->size(),
                need_process_rows_);
-    Assert(valid_bitset.size() == need_process_rows_);
+    Assert(bitmap_vec->validity().size() == need_process_rows_);
 
-    // Cache write: clone bitset into ExprResCacheManager — Stage 1 of two-stage
-    // search. Must clone before move since Stage 1 still owns the bitset for
-    // the ColumnVector return value below.
-    if (can_use_cache) {
-        ExprResCacheManager::Key key{cache_segment->get_segment_id(),
-                                     expr_cache_key_};
-        ExprResCacheManager::Value v;
-        v.result = std::make_shared<TargetBitmap>(bitset.clone());
-        v.valid_result = std::make_shared<TargetBitmap>(valid_bitset.clone());
-        v.active_count = need_process_rows_;
-        ExprResCacheManager::Instance().Put(key, v);
-    }
+    // Cache before moving the output into the RowVector.
+    put_cache(bitmap_vec);
 
     // num_processed_rows_ = need_process_rows_;
-    std::vector<VectorPtr> col_res;
-    col_res.push_back(std::make_shared<ColumnVector>(std::move(bitset),
-                                                     std::move(valid_bitset)));
     std::chrono::high_resolution_clock::time_point scalar_end =
         std::chrono::high_resolution_clock::now();
     double scalar_cost =
@@ -295,7 +292,8 @@ PhyFilterBitsNode::GetOutput() {
     milvus::monitor::internal_core_search_latency_scalar.Observe(scalar_cost /
                                                                  1000);
 
-    return std::make_shared<RowVector>(col_res);
+    return std::make_shared<RowVector>(
+        std::vector<VectorPtr>{std::move(bitmap_vec)});
 }
 
 }  // namespace exec

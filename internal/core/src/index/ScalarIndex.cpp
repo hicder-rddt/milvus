@@ -38,6 +38,88 @@
 
 namespace milvus::index {
 template <typename T>
+Bitmap
+ScalarIndex<T>::InBitmap(size_t n, const T* values) {
+    return Bitmap(In(n, values));
+}
+
+template <typename T>
+Bitmap
+ScalarIndex<T>::NotInBitmap(size_t n, const T* values) {
+    return Bitmap(NotIn(n, values));
+}
+
+template <typename T>
+Bitmap
+ScalarIndex<T>::RangeBitmap(const T& value, OpType op) {
+    return Bitmap(Range(value, op));
+}
+
+template <typename T>
+Bitmap
+ScalarIndex<T>::RangeBitmap(const T& lower_bound_value,
+                            bool lb_inclusive,
+                            const T& upper_bound_value,
+                            bool ub_inclusive) {
+    return Bitmap(Range(
+        lower_bound_value, lb_inclusive, upper_bound_value, ub_inclusive));
+}
+
+template <typename T>
+Bitmap
+ScalarIndex<T>::IsNullBitmap() {
+    return Bitmap(IsNull());
+}
+
+template <typename T>
+Bitmap
+ScalarIndex<T>::IsNotNullBitmap() {
+    return Bitmap(IsNotNull());
+}
+
+template <typename T>
+Bitmap
+ScalarIndex<T>::PatternMatchBitmap(const std::string& pattern,
+                                   proto::plan::OpType op) {
+    return Bitmap(PatternMatch(pattern, op));
+}
+
+template <typename T>
+Bitmap
+ScalarIndex<T>::QueryBitmap(const DatasetPtr& dataset) {
+    auto op = dataset->Get<OpType>(OPERATOR_TYPE);
+    switch (op) {
+        case OpType::LessThan:
+        case OpType::LessEqual:
+        case OpType::GreaterThan:
+        case OpType::GreaterEqual:
+            return RangeBitmap(dataset->Get<T>(RANGE_VALUE), op);
+        case OpType::Range:
+            return RangeBitmap(dataset->Get<T>(LOWER_BOUND_VALUE),
+                               dataset->Get<bool>(LOWER_BOUND_INCLUSIVE),
+                               dataset->Get<T>(UPPER_BOUND_VALUE),
+                               dataset->Get<bool>(UPPER_BOUND_INCLUSIVE));
+        case OpType::In:
+            return InBitmap(dataset->GetRows(),
+                            reinterpret_cast<const T*>(dataset->GetTensor()));
+        case OpType::NotIn:
+            return NotInBitmap(
+                dataset->GetRows(),
+                reinterpret_cast<const T*>(dataset->GetTensor()));
+        case OpType::Match:
+        case OpType::PrefixMatch:
+        case OpType::PostfixMatch:
+        case OpType::InnerMatch:
+        case OpType::RegexMatch:
+            return PatternMatchBitmap(dataset->Get<std::string>(MATCH_VALUE),
+                                      op);
+        default:
+            ThrowInfo(OpTypeInvalid,
+                      fmt::format("unsupported operator type: {}", op));
+    }
+}
+
+template <typename T>
 const TargetBitmap
 ScalarIndex<T>::Query(const DatasetPtr& dataset) {
     auto op = dataset->Get<OpType>(OPERATOR_TYPE);

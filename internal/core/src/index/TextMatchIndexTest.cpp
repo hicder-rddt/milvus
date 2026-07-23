@@ -39,6 +39,7 @@
 #include "common/common_type_c.h"
 #include "common/protobuf_utils.h"
 #include "exec/expression/ExprCache.h"
+#include "exec/expression/Utils.h"
 #include "exec/expression/function/FunctionFactory.h"
 #include "expr/ITypeExpr.h"
 #include "filemanager/InputStream.h"
@@ -286,6 +287,9 @@ TEST(TextMatch, Index) {
 
     {
         auto res = index->MatchQuery("football", 1);
+        auto bitmap_result =
+            index->MatchQueryBitmap("football", 1).to_dense();
+        EXPECT_TRUE(bitmap_result == res);
         ASSERT_EQ(res.size(), 3);
         ASSERT_TRUE(res[0]);
         ASSERT_FALSE(res[1]);
@@ -312,6 +316,9 @@ TEST(TextMatch, Index) {
 
     {
         auto res = index->PhraseMatchQuery("football", 0);
+        auto bitmap_result =
+            index->PhraseMatchQueryBitmap("football", 0).to_dense();
+        EXPECT_TRUE(bitmap_result == res);
         ASSERT_EQ(res.size(), 3);
         ASSERT_TRUE(res[0]);
         ASSERT_FALSE(res[1]);
@@ -360,6 +367,9 @@ TEST(TextMatch, FuzzyIndex) {
     {
         // "footbal" is one edit from "football", so distance 1 matches rows 0 and 2.
         auto res = index->FuzzyMatchQuery("footbal", 1);
+        auto bitmap_result =
+            index->FuzzyMatchQueryBitmap("footbal", 1).to_dense();
+        EXPECT_TRUE(bitmap_result == res);
         ASSERT_EQ(res.size(), 3);
         ASSERT_TRUE(res[0]);
         ASSERT_FALSE(res[1]);
@@ -1933,8 +1943,7 @@ ExecuteFilterBitsWithFullCache(
     auto row = ExecPlanNodeVisitor::ExecuteTask(plan_fragment, query_context);
     AssertInfo(row != nullptr,
                "ExecuteTask returned null row vector for query expression");
-    auto col_vec = std::dynamic_pointer_cast<ColumnVector>(row->childrens()[0]);
-    AssertInfo(col_vec != nullptr, "failed to cast to ColumnVector");
+    auto col_vec = milvus::exec::GetColumnVector(row->childrens()[0]);
     BitsetTypeView view(col_vec->GetRawData(), col_vec->size());
     BitsetType query_view(view);
     query_view.flip();

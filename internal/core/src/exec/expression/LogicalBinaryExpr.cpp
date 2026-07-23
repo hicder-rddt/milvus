@@ -15,12 +15,24 @@
 // limitations under the License.
 
 #include "LogicalBinaryExpr.h"
+#include "common/BitmapVector.h"
 
 #include "common/Tracer.h"
 #include "exec/expression/Utils.h"
 
 namespace milvus {
 namespace exec {
+namespace {
+
+BitmapVectorPtr
+GetLogicalBitmapVector(const VectorPtr& input) {
+    if (auto roaring = GetBitmapVector(input)) {
+        return roaring;
+    }
+    return BitmapVector::FromColumnVector(GetColumnVector(input));
+}
+
+}  // namespace
 
 void
 PhyLogicalBinaryExpr::Eval(EvalCtx& context, VectorPtr& result) {
@@ -34,27 +46,19 @@ PhyLogicalBinaryExpr::Eval(EvalCtx& context, VectorPtr& result) {
     inputs_[0]->Eval(context, left);
     VectorPtr right;
     inputs_[1]->Eval(context, right);
-    auto lflat = GetColumnVector(left);
-    auto rflat = GetColumnVector(right);
-    auto size = left->size();
-    TargetBitmapView lview(lflat->GetRawData(), size);
-    TargetBitmapView rview(rflat->GetRawData(), size);
+
+    auto left_bitmap = GetLogicalBitmapVector(left);
+    auto right_bitmap = GetLogicalBitmapVector(right);
     if (expr_->op_type_ == expr::LogicalBinaryExpr::OpType::And) {
-        LogicalElementFunc<LogicalOpType::And> func;
-        func(lview, rview, size);
+        left_bitmap->And(*right_bitmap);
     } else if (expr_->op_type_ == expr::LogicalBinaryExpr::OpType::Or) {
-        LogicalElementFunc<LogicalOpType::Or> func;
-        func(lview, rview, size);
+        left_bitmap->Or(*right_bitmap);
     } else {
         ThrowInfo(UnexpectedError,
                   "unsupported logical operator: {}",
                   expr_->GetOpTypeString());
     }
-    TargetBitmapView lvalid_view(lflat->GetValidRawData(), size);
-    TargetBitmapView rvalid_view(rflat->GetValidRawData(), size);
-    LogicalElementFunc<LogicalOpType::Or> func;
-    func(lvalid_view, rvalid_view, size);
-    result = std::move(left);
+    result = std::move(left_bitmap);
 }
 
 }  //namespace exec

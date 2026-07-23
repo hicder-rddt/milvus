@@ -44,6 +44,7 @@
 #include "exec/expression/TermExpr.h"
 #include "exec/expression/TimestamptzArithCompareExpr.h"
 #include "exec/expression/UnaryExpr.h"
+#include "exec/expression/Utils.h"
 #include "exec/expression/ValueExpr.h"
 #include "expr/ITypeExpr.h"
 #include "log/Log.h"
@@ -94,6 +95,15 @@ ExprSet::Eval(int32_t begin,
     for (size_t i = begin; i < end; ++i) {
         milvus::exec::checkCancellation(query_ctx);
         exprs_[i]->Eval(context, results[i]);
+        if (exprs_[i]->type() == DataType::BOOL &&
+            !std::dynamic_pointer_cast<BitmapVector>(results[i])) {
+            auto column =
+                std::dynamic_pointer_cast<ColumnVector>(results[i]);
+            AssertInfo(column != nullptr && column->IsBitmap(),
+                       "Boolean expression {} returned a non-bitmap vector",
+                       exprs_[i]->name());
+            results[i] = BitmapVector::FromColumnVector(column);
+        }
     }
 }
 
@@ -930,11 +940,7 @@ EvalExprSetOverAllBatches(ExprSet& expr_set,
         AssertInfo(results.size() == 1 && results[0] != nullptr,
                    "{}: filter expr returned null result",
                    what);
-        auto col_vec = std::dynamic_pointer_cast<ColumnVector>(results[0]);
-        if (col_vec == nullptr) {
-            ThrowInfo(
-                UnexpectedError, "{}: result should be ColumnVector", what);
-        }
+        auto col_vec = GetColumnVector(results[0]);
         if (!col_vec->IsBitmap()) {
             ThrowInfo(UnexpectedError, "{}: result should be bitmap", what);
         }

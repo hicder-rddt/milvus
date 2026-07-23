@@ -243,7 +243,7 @@ InvertedIndexTantivy<T>::Load(milvus::tracer::TraceContext ctx,
     auto load_in_mmap =
         GetValueFromConfig<bool>(config, ENABLE_MMAP).value_or(true);
     wrapper_ = std::make_shared<TantivyIndexWrapper>(
-        prefix.c_str(), load_in_mmap, milvus::index::SetBitsetSealed);
+        prefix.c_str(), load_in_mmap, milvus::index::SetHitsSealed);
 
     if (!load_in_mmap) {
         // the index is loaded in ram, so we can remove files in advance
@@ -340,8 +340,19 @@ const TargetBitmap
 InvertedIndexTantivy<T>::In(size_t n, const T* values) {
     tracer::AutoSpan span("InvertedIndexTantivy::In", tracer::GetRootSpan());
     TargetBitmap bitset(Count());
-    wrapper_->terms_query(values, n, &bitset);
+    auto sink = TantivyHitSink::Dense(bitset);
+    wrapper_->terms_query(values, n, &sink);
     return bitset;
+}
+
+template <typename T>
+Bitmap
+InvertedIndexTantivy<T>::InBitmap(size_t n, const T* values) {
+    roaring::Roaring bitset;
+    const auto count = Count();
+    auto sink = TantivyHitSink::Roaring(count, bitset);
+    wrapper_->terms_query(values, n, &sink);
+    return Bitmap(count, std::move(bitset));
 }
 
 template <typename T>
@@ -378,6 +389,30 @@ InvertedIndexTantivy<T>::IsNull() {
 }
 
 template <typename T>
+Bitmap
+InvertedIndexTantivy<T>::IsNullBitmap() {
+    const auto count = Count();
+    roaring::Roaring bitset;
+    if (is_nested_index_) {
+        return Bitmap(count, std::move(bitset));
+    }
+    auto fill = [&]() {
+        auto end =
+            std::lower_bound(null_offset_.begin(), null_offset_.end(), count);
+        for (auto iter = null_offset_.begin(); iter != end; ++iter) {
+            bitset.add(*iter);
+        }
+    };
+    if (is_growing_) {
+        std::shared_lock<folly::SharedMutex> lock(mutex_);
+        fill();
+    } else {
+        fill();
+    }
+    return Bitmap(count, std::move(bitset));
+}
+
+template <typename T>
 TargetBitmap
 InvertedIndexTantivy<T>::IsNotNull() {
     tracer::AutoSpan span("InvertedIndexTantivy::IsNotNull",
@@ -411,13 +446,22 @@ InvertedIndexTantivy<T>::IsNotNull() {
 }
 
 template <typename T>
+Bitmap
+InvertedIndexTantivy<T>::IsNotNullBitmap() {
+    auto bitset = IsNullBitmap();
+    bitset.flip();
+    return bitset;
+}
+
+template <typename T>
 const TargetBitmap
 InvertedIndexTantivy<T>::InApplyFilter(
     size_t n, const T* values, const std::function<bool(size_t)>& filter) {
     tracer::AutoSpan span("InvertedIndexTantivy::InApplyFilter",
                           tracer::GetRootSpan());
     TargetBitmap bitset(Count());
-    wrapper_->terms_query(values, n, &bitset);
+    auto sink = TantivyHitSink::Dense(bitset);
+    wrapper_->terms_query(values, n, &sink);
     // todo(SpadeA): could push-down the filter to tantivy query
     apply_hits_with_filter(bitset, filter);
     return bitset;
@@ -430,7 +474,8 @@ InvertedIndexTantivy<T>::InApplyCallback(
     tracer::AutoSpan span("InvertedIndexTantivy::InApplyCallback",
                           tracer::GetRootSpan());
     TargetBitmap bitset(Count());
-    wrapper_->terms_query(values, n, &bitset);
+    auto sink = TantivyHitSink::Dense(bitset);
+    wrapper_->terms_query(values, n, &sink);
     // todo(SpadeA): could push-down the callback to tantivy query
     apply_hits_with_callback(bitset, callback);
 }
@@ -441,7 +486,8 @@ InvertedIndexTantivy<T>::NotIn(size_t n, const T* values) {
     tracer::AutoSpan span("InvertedIndexTantivy::NotIn", tracer::GetRootSpan());
     int64_t count = Count();
     TargetBitmap bitset(count);
-    wrapper_->terms_query(values, n, &bitset);
+    auto sink = TantivyHitSink::Dense(bitset);
+    wrapper_->terms_query(values, n, &sink);
     // The expression is "not" in, so we flip the bit.
     bitset.flip();
 
@@ -464,23 +510,33 @@ InvertedIndexTantivy<T>::NotIn(size_t n, const T* values) {
 }
 
 template <typename T>
+Bitmap
+InvertedIndexTantivy<T>::NotInBitmap(size_t n, const T* values) {
+    auto bitset = InBitmap(n, values);
+    bitset.flip();
+    bitset.and_with(IsNotNullBitmap());
+    return bitset;
+}
+
+template <typename T>
 const TargetBitmap
 InvertedIndexTantivy<T>::Range(const T& value, OpType op) {
     tracer::AutoSpan span("InvertedIndexTantivy::Range", tracer::GetRootSpan());
     TargetBitmap bitset(Count());
+    auto sink = TantivyHitSink::Dense(bitset);
 
     switch (op) {
         case OpType::LessThan: {
-            wrapper_->upper_bound_range_query(value, false, &bitset);
+            wrapper_->upper_bound_range_query(value, false, &sink);
         } break;
         case OpType::LessEqual: {
-            wrapper_->upper_bound_range_query(value, true, &bitset);
+            wrapper_->upper_bound_range_query(value, true, &sink);
         } break;
         case OpType::GreaterThan: {
-            wrapper_->lower_bound_range_query(value, false, &bitset);
+            wrapper_->lower_bound_range_query(value, false, &sink);
         } break;
         case OpType::GreaterEqual: {
-            wrapper_->lower_bound_range_query(value, true, &bitset);
+            wrapper_->lower_bound_range_query(value, true, &sink);
         } break;
         default:
             ThrowInfo(OpTypeInvalid,
@@ -488,6 +544,32 @@ InvertedIndexTantivy<T>::Range(const T& value, OpType op) {
     }
 
     return bitset;
+}
+
+template <typename T>
+Bitmap
+InvertedIndexTantivy<T>::RangeBitmap(const T& value, OpType op) {
+    const auto count = Count();
+    roaring::Roaring bitset;
+    auto sink = TantivyHitSink::Roaring(count, bitset);
+    switch (op) {
+        case OpType::LessThan:
+            wrapper_->upper_bound_range_query(value, false, &sink);
+            break;
+        case OpType::LessEqual:
+            wrapper_->upper_bound_range_query(value, true, &sink);
+            break;
+        case OpType::GreaterThan:
+            wrapper_->lower_bound_range_query(value, false, &sink);
+            break;
+        case OpType::GreaterEqual:
+            wrapper_->lower_bound_range_query(value, true, &sink);
+            break;
+        default:
+            ThrowInfo(OpTypeInvalid,
+                      fmt::format("Invalid OperatorType: {}", op));
+    }
+    return Bitmap(count, std::move(bitset));
 }
 
 template <typename T>
@@ -499,12 +581,30 @@ InvertedIndexTantivy<T>::Range(const T& lower_bound_value,
     tracer::AutoSpan span("InvertedIndexTantivy::RangeWithBounds",
                           tracer::GetRootSpan());
     TargetBitmap bitset(Count());
+    auto sink = TantivyHitSink::Dense(bitset);
     wrapper_->range_query(lower_bound_value,
                           upper_bound_value,
                           lb_inclusive,
                           ub_inclusive,
-                          &bitset);
+                          &sink);
     return bitset;
+}
+
+template <typename T>
+Bitmap
+InvertedIndexTantivy<T>::RangeBitmap(const T& lower_bound_value,
+                                     bool lb_inclusive,
+                                     const T& upper_bound_value,
+                                     bool ub_inclusive) {
+    const auto count = Count();
+    roaring::Roaring bitset;
+    auto sink = TantivyHitSink::Roaring(count, bitset);
+    wrapper_->range_query(lower_bound_value,
+                          upper_bound_value,
+                          lb_inclusive,
+                          ub_inclusive,
+                          &sink);
+    return Bitmap(count, std::move(bitset));
 }
 
 template <typename T>
@@ -513,9 +613,20 @@ InvertedIndexTantivy<T>::PrefixMatch(const std::string_view prefix) {
     tracer::AutoSpan span("InvertedIndexTantivy::PrefixMatch",
                           tracer::GetRootSpan());
     TargetBitmap bitset(Count());
+    auto sink = TantivyHitSink::Dense(bitset);
     std::string s(prefix);
-    wrapper_->prefix_query(s, &bitset);
+    wrapper_->prefix_query(s, &sink);
     return bitset;
+}
+
+template <typename T>
+Bitmap
+InvertedIndexTantivy<T>::PrefixMatchBitmap(const std::string_view prefix) {
+    const auto count = Count();
+    roaring::Roaring bitset;
+    auto sink = TantivyHitSink::Roaring(count, bitset);
+    wrapper_->prefix_query(std::string(prefix), &sink);
+    return Bitmap(count, std::move(bitset));
 }
 
 template <typename T>
@@ -544,8 +655,59 @@ InvertedIndexTantivy<T>::PatternQuery(const std::string& pattern) {
     PatternMatchTranslator translator;
     auto regex_pattern = translator(pattern);
     TargetBitmap bitset(Count());
-    wrapper_->regex_query(regex_pattern, &bitset);
+    auto sink = TantivyHitSink::Dense(bitset);
+    wrapper_->regex_query(regex_pattern, &sink);
     return bitset;
+}
+
+template <typename T>
+Bitmap
+InvertedIndexTantivy<T>::PatternQueryBitmap(const std::string& pattern) {
+    PatternMatchTranslator translator;
+    auto regex_pattern = translator(pattern);
+    const auto count = Count();
+    roaring::Roaring bitset;
+    auto sink = TantivyHitSink::Roaring(count, bitset);
+    wrapper_->regex_query(regex_pattern, &sink);
+    return Bitmap(count, std::move(bitset));
+}
+
+template <typename T>
+Bitmap
+InvertedIndexTantivy<T>::PatternMatchBitmap(const std::string& pattern,
+                                            proto::plan::OpType op) {
+    switch (op) {
+        case proto::plan::OpType::PrefixMatch:
+            return PrefixMatchBitmap(pattern);
+        case proto::plan::OpType::PostfixMatch:
+            return PatternQueryBitmap(
+                fmt::format("%{}", EscapeLikePattern(pattern)));
+        case proto::plan::OpType::InnerMatch:
+            return PatternQueryBitmap(
+                fmt::format("%{}%", EscapeLikePattern(pattern)));
+        case proto::plan::OpType::Match:
+            return PatternQueryBitmap(pattern);
+        case proto::plan::OpType::RegexMatch: {
+            const auto count = Count();
+            roaring::Roaring bitset;
+            auto sink = TantivyHitSink::Roaring(count, bitset);
+            PartialRegexMatcher matcher(pattern);
+            wrapper_->regex_match_query(
+                &matcher,
+                [](void* ctx, const uint8_t* term, uintptr_t term_len) -> bool {
+                    auto* matcher = static_cast<PartialRegexMatcher*>(ctx);
+                    return (*matcher)(std::string_view(
+                        reinterpret_cast<const char*>(term), term_len));
+                },
+                &sink);
+            return Bitmap(count, std::move(bitset));
+        }
+        default:
+            ThrowInfo(ErrorCode::OpTypeInvalid,
+                      "not supported op type: {} for inverted index "
+                      "PatternMatchBitmap",
+                      op);
+    }
 }
 
 template <typename T>
@@ -635,7 +797,7 @@ InvertedIndexTantivy<T>::BuildWithRawDataForUT(size_t n,
                 static_cast<const T*>(values), n);
         }
     }
-    wrapper_->create_reader(milvus::index::SetBitsetSealed);
+    wrapper_->create_reader(milvus::index::SetHitsSealed);
     finish();
     wrapper_->reload();
     ComputeByteSize();
@@ -949,7 +1111,7 @@ InvertedIndexTantivy<T>::LoadEntries(storage::IndexEntryReader& reader,
     auto load_in_mmap =
         GetValueFromConfig<bool>(config, ENABLE_MMAP).value_or(true);
     wrapper_ = std::make_shared<TantivyIndexWrapper>(
-        path_.c_str(), load_in_mmap, milvus::index::SetBitsetSealed);
+        path_.c_str(), load_in_mmap, milvus::index::SetHitsSealed);
 
     if (!load_in_mmap) {
         disk_file_manager_->RemoveIndexFiles();

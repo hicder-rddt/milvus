@@ -48,8 +48,8 @@ PhyConjunctFilterExpr::ResolveType(const std::vector<DataType>& inputs) {
     return DataType::BOOL;
 }
 
-TargetBitmap
-PhyConjunctFilterExpr::BuildActiveBitmap(const ColumnVectorPtr& vec) {
+Bitmap
+PhyConjunctFilterExpr::BuildActiveBitmap(const BitmapVector& vec) {
     // Rows that still need the following expressions.
     //
     // For AND: TRUE or NULL rows still need evaluation; only definite FALSE
@@ -60,23 +60,20 @@ PhyConjunctFilterExpr::BuildActiveBitmap(const ColumnVectorPtr& vec) {
     // For OR: FALSE or NULL rows still need evaluation; only definite TRUE
     //   can stop. A NULL row can still become TRUE (NULL OR TRUE = TRUE),
     //   so null-rejection does not shrink the active set for OR.
-    const size_t size = vec->size();
-    TargetBitmapView data(vec->GetRawData(), size);
-    TargetBitmapView valid(vec->GetValidRawData(), size);
     if (is_and_) {
         if (null_rejecting_) {
-            TargetBitmap active_rows(data);
-            active_rows.inplace_and(valid, size);  // data & valid
+            auto active_rows = vec.result().clone();
+            active_rows.and_with(vec.validity());  // data & valid
             return active_rows;
         }
-        TargetBitmap active_rows(valid);
-        active_rows.inplace_sub(data, size);  // valid & ~data
-        active_rows.flip();                   // data | ~valid
+        auto active_rows = vec.validity().clone();
+        active_rows.flip();
+        active_rows.or_with(vec.result());  // data | ~valid
         return active_rows;
     }
-    TargetBitmap active_rows(data);
-    active_rows.inplace_and(valid, size);  // data & valid
-    active_rows.flip();                    // ~data | ~valid
+    auto active_rows = vec.result().clone();
+    active_rows.and_with(vec.validity());
+    active_rows.flip();  // ~data | ~valid
     return active_rows;
 }
 
@@ -172,20 +169,28 @@ PhyConjunctFilterExpr::Eval(EvalCtx& context, VectorPtr& result) {
         VectorPtr input_result;
         inputs_[idx]->Eval(context, input_result);
 
-        ColumnVectorPtr all_flat_result;
+        BitmapVectorPtr all_bitmap_result;
         if (!has_result) {
-            result = input_result;
+            all_bitmap_result = GetBitmapVector(input_result);
+            if (all_bitmap_result == nullptr) {
+                all_bitmap_result = BitmapVector::FromColumnVector(
+                    GetColumnVector(input_result));
+            }
+            result = all_bitmap_result;
             has_result = true;
-            all_flat_result = GetColumnVector(result);
         } else {
-            auto input_flat_result = GetColumnVector(input_result);
-            all_flat_result = GetColumnVector(result);
+            all_bitmap_result = GetBitmapVector(result);
+            AssertInfo(all_bitmap_result != nullptr,
+                       "conjunct accumulator must be a BitmapVector");
+            auto input_bitmap = GetBitmapVector(input_result);
+            if (input_bitmap == nullptr) {
+                input_bitmap = BitmapVector::FromColumnVector(
+                    GetColumnVector(input_result));
+            }
             if (is_and_) {
-                common::ThreeValuedLogicOp::And(all_flat_result,
-                                                input_flat_result);
+                all_bitmap_result->And(*input_bitmap);
             } else {
-                common::ThreeValuedLogicOp::Or(all_flat_result,
-                                               input_flat_result);
+                all_bitmap_result->Or(*input_bitmap);
             }
         }
 
@@ -198,7 +203,7 @@ PhyConjunctFilterExpr::Eval(EvalCtx& context, VectorPtr& result) {
         // Build the active-row bitmap once per input: it decides the
         // batch-level early exit, and the same bitmap becomes the row-level
         // input of the next expression.
-        auto active_rows = BuildActiveBitmap(all_flat_result);
+        auto active_rows = BuildActiveBitmap(*all_bitmap_result);
         if (active_rows.none()) {
             SkipFollowingExprs(i + 1);
             ClearBitmapInput(context);

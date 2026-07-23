@@ -24,6 +24,11 @@
 
 namespace milvus {
 
+ColumnVector::~ColumnVector() {
+    values_.reset();
+    valid_values_.reset();
+}
+
 void
 BaseVector::prepareForReuse(milvus::VectorPtr& vector,
                             milvus::vector_size_t size) {

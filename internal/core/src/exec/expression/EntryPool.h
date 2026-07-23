@@ -24,7 +24,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "common/Types.h"
+#include "common/BitmapVector.h"
 #include "exec/expression/CacheCompressor.h"
 #include "exec/expression/ExprCache.h"
 
@@ -108,8 +108,8 @@ class EntryPool {
     Get(int64_t segment_id,
         const std::string& signature,
         int64_t active_count,
-        TargetBitmap& out_result,
-        TargetBitmap& out_valid);
+        Bitmap& out_result,
+        Bitmap& out_valid);
 
     // Insert a compressed entry. Compression is done internally.
     // May trigger Clock eviction if over capacity.
@@ -118,8 +118,8 @@ class EntryPool {
     Put(int64_t segment_id,
         const std::string& signature,
         int64_t active_count,
-        const TargetBitmap& result,
-        const TargetBitmap& valid,
+        const Bitmap& result,
+        const Bitmap& valid,
         int64_t eval_duration_us = 0);
 
     // Erase all entries belonging to a segment. Returns number erased.

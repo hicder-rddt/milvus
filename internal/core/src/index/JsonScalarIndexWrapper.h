@@ -224,7 +224,7 @@ class JsonScalarIndexWrapper : public BaseIndex {
     template <typename B = BaseIndex>
     std::enable_if_t<std::is_base_of_v<InvertedIndexTantivy<T>, B>>
     create_reader(SetBitsetFn set_bitset) {
-        this->wrapper_->create_reader(set_bitset);
+        this->wrapper_->create_reader(ToTantivyHitSinkCallback(set_bitset));
     }
 
     // v2: load non_exist_offsets from index files, with v2.5.x fallback.

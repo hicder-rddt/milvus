@@ -36,8 +36,8 @@ bool
 EntryPool::Get(int64_t segment_id,
                const std::string& signature,
                int64_t active_count,
-               TargetBitmap& out_result,
-               TargetBitmap& out_valid) {
+               Bitmap& out_result,
+               Bitmap& out_valid) {
     uint64_t sig_hash = XXH64(signature.data(), signature.size(), 0);
     Key key{segment_id, sig_hash, signature, active_count};
 
@@ -80,8 +80,8 @@ void
 EntryPool::Put(int64_t segment_id,
                const std::string& signature,
                int64_t active_count,
-               const TargetBitmap& result,
-               const TargetBitmap& valid,
+               const Bitmap& result,
+               const Bitmap& valid,
                int64_t eval_duration_us) {
     uint64_t sig_hash = XXH64(signature.data(), signature.size(), 0);
     Key key{segment_id, sig_hash, signature, active_count};

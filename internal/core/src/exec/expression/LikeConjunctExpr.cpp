@@ -86,7 +86,7 @@ PhyLikeConjunctExpr::Eval(EvalCtx& context, VectorPtr& result) {
                    "bitmap_input size {} != real_batch_size {}",
                    bitmap_input.size(),
                    real_batch_size);
-        batch_candidates &= bitmap_input;
+        batch_candidates &= bitmap_input.to_dense();
     }
 
     // Execute Phase2 (post-filter) on this batch
@@ -103,7 +103,7 @@ PhyLikeConjunctExpr::Eval(EvalCtx& context, VectorPtr& result) {
     // For ngram like expression, the valid result is always true as result has all information
     TargetBitmap valid_result(real_batch_size, true);
     current_pos_ += real_batch_size;
-    result = std::make_shared<ColumnVector>(std::move(batch_candidates),
+    result = std::make_shared<BitmapVector>(std::move(batch_candidates),
                                             std::move(valid_result));
 }
 }  // namespace exec

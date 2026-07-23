@@ -19,6 +19,7 @@
 #include "bitset/common.h"
 #include "bitset/detail/element_vectorized.h"
 #include "common/Schema.h"
+#include "common/BitmapVector.h"
 #include "common/Types.h"
 #include "gtest/gtest.h"
 #include "index/ScalarIndexSort.h"
@@ -54,4 +55,19 @@ TEST(Bitmap, Naive) {
         }
         ASSERT_NEAR(count / N, 0.682, 0.01);
     }
+}
+
+TEST(Bitmap, ConstructFromRoaring) {
+    milvus::RoaringBitmap roaring;
+    roaring.add(1);
+    roaring.add(7);
+    roaring.add(63);
+
+    milvus::Bitmap bitmap(64, std::move(roaring));
+    EXPECT_TRUE(bitmap.is_roaring());
+    EXPECT_EQ(bitmap.count(), 3);
+    EXPECT_TRUE(bitmap[1]);
+    EXPECT_TRUE(bitmap[7]);
+    EXPECT_TRUE(bitmap[63]);
+    EXPECT_FALSE(bitmap[62]);
 }

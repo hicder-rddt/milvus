@@ -261,8 +261,7 @@ PhyIterativeFilterNode::GetOutput() {
                         "one and not "
                         "be nullptr");
 
-                    auto col_vec =
-                        std::dynamic_pointer_cast<ColumnVector>(results[0]);
+                    auto col_vec = GetColumnVector(results[0]);
                     auto col_vec_size = col_vec->size();
                     TargetBitmapView bitsetview(col_vec->GetRawData(),
                                                 col_vec_size);

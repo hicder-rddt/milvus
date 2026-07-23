@@ -14,13 +14,13 @@
 #include <memory>
 #include <vector>
 
+#include "common/BitmapVector.h"
 #include "common/Schema.h"
 #include "exec/QueryContext.h"
 #include "exec/Task.h"
 #include "expr/ITypeExpr.h"
 #include "pb/plan.pb.h"
 #include "plan/PlanNode.h"
-#include "segcore/SegcoreConfig.h"
 #include "segcore/SegmentSealed.h"
 #include "segcore/SegmentGrowingImpl.h"
 #include "segcore/Types.h"
@@ -132,10 +132,10 @@ TEST_F(MvccFastPathTest, Level1_SealedNoDeletes_SkipFilter) {
 
     // Verify output bitmap is all zeros (no rows filtered out)
     ASSERT_NE(result.output, nullptr);
-    auto col = std::static_pointer_cast<ColumnVector>(result.output->child(0));
-    ASSERT_NE(col, nullptr);
-    TargetBitmapView view(col->GetRawData(), col->size());
-    EXPECT_EQ(view.count(), 0)
+    auto bitmap =
+        std::dynamic_pointer_cast<BitmapVector>(result.output->child(0));
+    ASSERT_NE(bitmap, nullptr);
+    EXPECT_EQ(bitmap->count(), 0)
         << "Level 1: bitmap should be all zeros (no filtering)";
 }
 
@@ -154,10 +154,10 @@ TEST_F(MvccFastPathTest, Level2_SealedWithDeletes_DeleteMaskOnly) {
 
     // Verify output bitmap has some bits set (deleted rows marked)
     ASSERT_NE(result.output, nullptr);
-    auto col = std::static_pointer_cast<ColumnVector>(result.output->child(0));
-    ASSERT_NE(col, nullptr);
-    TargetBitmapView view(col->GetRawData(), col->size());
-    EXPECT_GT(view.count(), 0)
+    auto bitmap =
+        std::dynamic_pointer_cast<BitmapVector>(result.output->child(0));
+    ASSERT_NE(bitmap, nullptr);
+    EXPECT_GT(bitmap->count(), 0)
         << "Level 2: bitmap should have deleted rows marked";
 }
 
@@ -290,23 +290,21 @@ TEST_F(MvccFastPathTest, Level1_NoCachePollution_SequentialQueries) {
     // First query – Level 1
     auto result1 = RunMvccPlan(segment.get());
     ASSERT_TRUE(result1.all_rows_visible);
-    auto col1 =
-        std::static_pointer_cast<ColumnVector>(result1.output->child(0));
-    ASSERT_NE(col1, nullptr);
-    TargetBitmapView view1(col1->GetRawData(), col1->size());
-    EXPECT_EQ(view1.count(), 0);
+    auto bitmap1 = std::dynamic_pointer_cast<BitmapVector>(
+        result1.output->child(0));
+    ASSERT_NE(bitmap1, nullptr);
+    EXPECT_EQ(bitmap1->count(), 0);
 
     // Simulate downstream mutation (ElementFilterBitsNode does doc_bitset.flip)
-    view1.flip();
-    EXPECT_EQ(view1.count(), N_);
+    bitmap1->Flip();
+    EXPECT_EQ(bitmap1->count(), N_);
 
     // Second query on the same thread – must NOT see the flipped bits
     auto result2 = RunMvccPlan(segment.get());
     ASSERT_TRUE(result2.all_rows_visible);
-    auto col2 =
-        std::static_pointer_cast<ColumnVector>(result2.output->child(0));
-    ASSERT_NE(col2, nullptr);
-    TargetBitmapView view2(col2->GetRawData(), col2->size());
-    EXPECT_EQ(view2.count(), 0)
+    auto bitmap2 = std::dynamic_pointer_cast<BitmapVector>(
+        result2.output->child(0));
+    ASSERT_NE(bitmap2, nullptr);
+    EXPECT_EQ(bitmap2->count(), 0)
         << "Second query must return clean bitmap, not polluted cache";
 }

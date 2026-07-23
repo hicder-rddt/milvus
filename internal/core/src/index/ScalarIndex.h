@@ -22,6 +22,7 @@
 #include <string>
 
 #include "common/Types.h"
+#include "common/BitmapVector.h"
 #include "common/EasyAssert.h"
 #include "index/Index.h"
 #include "fmt/format.h"
@@ -128,11 +129,20 @@ class ScalarIndex : public IndexBase {
     virtual const TargetBitmap
     In(size_t n, const T* values) = 0;
 
+    virtual Bitmap
+    InBitmap(size_t n, const T* values);
+
     virtual const TargetBitmap
     IsNull() = 0;
 
+    virtual Bitmap
+    IsNullBitmap();
+
     virtual TargetBitmap
     IsNotNull() = 0;
+
+    virtual Bitmap
+    IsNotNullBitmap();
 
     virtual const TargetBitmap
     InApplyFilter(size_t n,
@@ -151,14 +161,26 @@ class ScalarIndex : public IndexBase {
     virtual const TargetBitmap
     NotIn(size_t n, const T* values) = 0;
 
+    virtual Bitmap
+    NotInBitmap(size_t n, const T* values);
+
     virtual const TargetBitmap
     Range(const T& value, OpType op) = 0;
+
+    virtual Bitmap
+    RangeBitmap(const T& value, OpType op);
 
     virtual const TargetBitmap
     Range(const T& lower_bound_value,
           bool lb_inclusive,
           const T& upper_bound_value,
           bool ub_inclusive) = 0;
+
+    virtual Bitmap
+    RangeBitmap(const T& lower_bound_value,
+                bool lb_inclusive,
+                const T& upper_bound_value,
+                bool ub_inclusive);
 
     virtual std::optional<T>
     Reverse_Lookup(size_t offset) const = 0;
@@ -176,6 +198,9 @@ class ScalarIndex : public IndexBase {
     virtual const TargetBitmap
     Query(const DatasetPtr& dataset);
 
+    virtual Bitmap
+    QueryBitmap(const DatasetPtr& dataset);
+
     virtual bool
     SupportPatternMatch() const {
         return false;
@@ -189,6 +214,9 @@ class ScalarIndex : public IndexBase {
     PatternMatch(const std::string& pattern, proto::plan::OpType op) {
         ThrowInfo(Unsupported, "pattern match is not supported");
     }
+
+    virtual Bitmap
+    PatternMatchBitmap(const std::string& pattern, proto::plan::OpType op);
 
     virtual bool
     IsMmapSupported() const override {

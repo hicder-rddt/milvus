@@ -269,7 +269,7 @@ PhyGISCoarseConjunctExpr::Eval(EvalCtx& context, VectorPtr& result) {
                    "bitmap_input size {} != real_batch_size {}",
                    outer_mask.size(),
                    real_batch_size);
-        out &= outer_mask;
+        out &= outer_mask.to_dense();
     }
     // valid is all-ones intentionally (see also the Refine node). PRECONDITION:
     // these split nodes NEVER sit under a NOT and "null == not-selected" for
@@ -360,7 +360,7 @@ PhyGISRefineConjunctExpr::Eval(EvalCtx& context, VectorPtr& result) {
                    "bitmap_input size {} != real_batch_size {}",
                    pre.size(),
                    real_batch_size);
-        survivors &= pre;
+        survivors &= pre.to_dense();
     }
     if (st_->coarse_candidates != nullptr) {
         // Redundant by construction TODAY: the Coarse node sits in an earlier

@@ -21,6 +21,7 @@
 #include <fmt/core.h>
 
 #include "common/EasyAssert.h"
+#include "common/BitmapVector.h"
 #include "common/Types.h"
 #include "common/Vector.h"
 #include "exec/expression/Expr.h"
@@ -54,21 +55,40 @@ GetColumnVector(const VectorPtr& result) {
     ColumnVectorPtr res;
     if (auto convert_vector = std::dynamic_pointer_cast<ColumnVector>(result)) {
         res = convert_vector;
+    } else if (auto roaring_vector =
+                   std::dynamic_pointer_cast<BitmapVector>(result)) {
+        res = roaring_vector->ToColumnVector();
     } else if (auto convert_vector =
                    std::dynamic_pointer_cast<RowVector>(result)) {
         if (auto convert_flat_vector = std::dynamic_pointer_cast<ColumnVector>(
                 convert_vector->child(0))) {
             res = convert_flat_vector;
+        } else if (auto roaring_vector =
+                       std::dynamic_pointer_cast<BitmapVector>(
+                           convert_vector->child(0))) {
+            res = roaring_vector->ToColumnVector();
         } else {
-            ThrowInfo(
-                UnexpectedError,
-                "RowVector result must have a first ColumnVector children");
+            ThrowInfo(UnexpectedError,
+                      "RowVector result must have a first bitmap vector child");
         }
     } else {
         ThrowInfo(UnexpectedError,
-                  "expr result must have a ColumnVector or RowVector result");
+                  "expr result must have a ColumnVector or RowVector result, "
+                  "got {}",
+                  result ? typeid(*result).name() : "null");
     }
     return res;
+}
+
+[[maybe_unused]] static BitmapVectorPtr
+GetBitmapVector(const VectorPtr& result) {
+    if (auto roaring = std::dynamic_pointer_cast<BitmapVector>(result)) {
+        return roaring;
+    }
+    if (auto row = std::dynamic_pointer_cast<RowVector>(result)) {
+        return std::dynamic_pointer_cast<BitmapVector>(row->child(0));
+    }
+    return nullptr;
 }
 
 template <typename T>

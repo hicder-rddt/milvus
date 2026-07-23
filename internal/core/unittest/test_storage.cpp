@@ -1364,6 +1364,8 @@ TEST(MinioChecksumConfig, OverridesAreWhenRequired) {
               Aws::Client::RequestChecksumCalculation::WHEN_REQUIRED);
     EXPECT_EQ(config.checksumConfig.responseChecksumValidation,
               Aws::Client::ResponseChecksumValidation::WHEN_REQUIRED);
+
+    init_guard.ShutdownSDKAPI();
 }
 
 TEST(MinioChecksumConfig, NeedChecksumOverrideDispatch) {

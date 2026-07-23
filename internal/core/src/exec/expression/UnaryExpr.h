@@ -154,7 +154,7 @@ struct UnaryElementFuncForMatch {
                size_t size,
                const IndexInnerType& val,
                TargetBitmapView res,
-               const TargetBitmap& bitmap_input,
+               const Bitmap& bitmap_input,
                int start_cursor,
                const int32_t* offsets = nullptr) {
         if constexpr (std::is_same_v<T, std::string> ||
@@ -234,7 +234,7 @@ struct UnaryElementFuncForRegexMatch {
                size_t size,
                const IndexInnerType& val,
                TargetBitmapView res,
-               const TargetBitmap& bitmap_input,
+               const Bitmap& bitmap_input,
                int start_cursor,
                const int32_t* offsets = nullptr) {
         if constexpr (std::is_same_v<T, std::string> ||
@@ -359,7 +359,7 @@ struct UnaryElementFunc {
                size_t size,
                const IndexInnerType& val,
                TargetBitmapView res,
-               const TargetBitmap& bitmap_input,
+               const Bitmap& bitmap_input,
                size_t start_cursor,
                const int32_t* offsets = nullptr) {
         bool has_bitmap_input = !bitmap_input.empty();
@@ -505,7 +505,7 @@ struct UnaryElementFuncForArray {
                int index,
                TargetBitmapView res,
                TargetBitmapView valid_res,
-               const TargetBitmap& bitmap_input,
+               const Bitmap& bitmap_input,
                size_t start_cursor,
                const int32_t* offsets = nullptr) {
         bool has_bitmap_input = !bitmap_input.empty();
@@ -632,7 +632,7 @@ struct UnaryIndexFuncForMatch {
     using IndexInnerType =
         std::conditional_t<std::is_same_v<T, std::string_view>, std::string, T>;
     using Index = index::ScalarIndex<IndexInnerType>;
-    TargetBitmap
+    Bitmap
     operator()(Index* index, IndexInnerType val, proto::plan::OpType op) {
         AssertInfo(op == proto::plan::OpType::Match ||
                        op == proto::plan::OpType::PostfixMatch ||
@@ -644,7 +644,7 @@ struct UnaryIndexFuncForMatch {
         if constexpr (std::is_same_v<T, std::string> ||
                       std::is_same_v<T, std::string_view>) {
             if (index->SupportPatternMatch()) {
-                return index->PatternMatch(val, op);
+                return index->PatternMatchBitmap(val, op);
             }
 
             if (!index->HasRawData()) {
@@ -690,20 +690,20 @@ struct UnaryIndexFunc {
     using IndexInnerType =
         std::conditional_t<std::is_same_v<T, std::string_view>, std::string, T>;
     using Index = index::ScalarIndex<IndexInnerType>;
-    TargetBitmap
+    Bitmap
     operator()(Index* index, IndexInnerType val) {
         if constexpr (op == proto::plan::OpType::Equal) {
-            return index->In(1, &val);
+            return index->InBitmap(1, &val);
         } else if constexpr (op == proto::plan::OpType::NotEqual) {
-            return index->NotIn(1, &val);
+            return index->NotInBitmap(1, &val);
         } else if constexpr (op == proto::plan::OpType::GreaterThan) {
-            return index->Range(val, OpType::GreaterThan);
+            return index->RangeBitmap(val, OpType::GreaterThan);
         } else if constexpr (op == proto::plan::OpType::LessThan) {
-            return index->Range(val, OpType::LessThan);
+            return index->RangeBitmap(val, OpType::LessThan);
         } else if constexpr (op == proto::plan::OpType::GreaterEqual) {
-            return index->Range(val, OpType::GreaterEqual);
+            return index->RangeBitmap(val, OpType::GreaterEqual);
         } else if constexpr (op == proto::plan::OpType::LessEqual) {
-            return index->Range(val, OpType::LessEqual);
+            return index->RangeBitmap(val, OpType::LessEqual);
         } else if constexpr (op == proto::plan::OpType::PrefixMatch ||
                              op == proto::plan::OpType::Match ||
                              op == proto::plan::OpType::PostfixMatch ||
@@ -716,7 +716,7 @@ struct UnaryIndexFunc {
                 // Prefer PatternMatch which iterates unique values
                 // (O(unique) vs O(total_rows) for Reverse_Lookup)
                 if (index->SupportPatternMatch()) {
-                    return index->PatternMatch(val, op);
+                    return index->PatternMatchBitmap(val, op);
                 }
                 // Fallback to Reverse_Lookup for indexes without
                 // PatternMatch support

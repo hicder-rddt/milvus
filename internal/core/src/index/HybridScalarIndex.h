@@ -90,9 +90,19 @@ class HybridScalarIndex : public ScalarIndex<T> {
         return internal_index_->In(n, values);
     }
 
+    Bitmap
+    InBitmap(size_t n, const T* values) override {
+        return internal_index_->InBitmap(n, values);
+    }
+
     const TargetBitmap
     NotIn(size_t n, const T* values) override {
         return internal_index_->NotIn(n, values);
+    }
+
+    Bitmap
+    NotInBitmap(size_t n, const T* values) override {
+        return internal_index_->NotInBitmap(n, values);
     }
 
     const TargetBitmap
@@ -100,14 +110,29 @@ class HybridScalarIndex : public ScalarIndex<T> {
         return internal_index_->IsNull();
     }
 
+    Bitmap
+    IsNullBitmap() override {
+        return internal_index_->IsNullBitmap();
+    }
+
     TargetBitmap
     IsNotNull() override {
         return internal_index_->IsNotNull();
     }
 
+    Bitmap
+    IsNotNullBitmap() override {
+        return internal_index_->IsNotNullBitmap();
+    }
+
     const TargetBitmap
     Query(const DatasetPtr& dataset) override {
         return internal_index_->Query(dataset);
+    }
+
+    Bitmap
+    QueryBitmap(const DatasetPtr& dataset) override {
+        return internal_index_->QueryBitmap(dataset);
     }
 
     bool
@@ -126,9 +151,20 @@ class HybridScalarIndex : public ScalarIndex<T> {
         return internal_index_->PatternMatch(pattern, op);
     }
 
+    Bitmap
+    PatternMatchBitmap(const std::string& pattern,
+                       proto::plan::OpType op) override {
+        return internal_index_->PatternMatchBitmap(pattern, op);
+    }
+
     const TargetBitmap
     Range(const T& value, OpType op) override {
         return internal_index_->Range(value, op);
+    }
+
+    Bitmap
+    RangeBitmap(const T& value, OpType op) override {
+        return internal_index_->RangeBitmap(value, op);
     }
 
     const TargetBitmap
@@ -137,6 +173,15 @@ class HybridScalarIndex : public ScalarIndex<T> {
           const T& upper_bound_value,
           bool ub_inclusive) override {
         return internal_index_->Range(
+            lower_bound_value, lb_inclusive, upper_bound_value, ub_inclusive);
+    }
+
+    Bitmap
+    RangeBitmap(const T& lower_bound_value,
+                bool lb_inclusive,
+                const T& upper_bound_value,
+                bool ub_inclusive) override {
+        return internal_index_->RangeBitmap(
             lower_bound_value, lb_inclusive, upper_bound_value, ub_inclusive);
     }
 

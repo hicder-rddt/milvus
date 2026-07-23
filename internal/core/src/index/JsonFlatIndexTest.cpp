@@ -313,6 +313,30 @@ TEST(JsonFlatIndexExactPathExistsTest, DistinguishesObjectSubpaths) {
     EXPECT_FALSE(exact_exists[5]);
 }
 
+TEST(JsonFlatIndexBitmapTest, DenseParity) {
+    auto json_index = BuildInMemoryJsonFlatIndex({
+        R"({"a": 1})",
+        R"({"a": 2})",
+        R"({"a": 3})",
+        R"({"a": null})",
+        R"({})",
+    });
+    std::string json_path = "/a";
+    auto executor = json_index->create_executor<int64_t>(json_path);
+
+    const int64_t values[] = {1, 3};
+    auto in_bitmap = executor->InBitmap(2, values).to_dense();
+    auto in_dense = executor->In(2, values);
+    EXPECT_TRUE(in_bitmap == in_dense);
+    auto not_in_bitmap = executor->NotInBitmap(2, values).to_dense();
+    auto not_in_dense = executor->NotIn(2, values);
+    EXPECT_TRUE(not_in_bitmap == not_in_dense);
+    auto range_bitmap =
+        executor->RangeBitmap(int64_t{2}, OpType::GreaterEqual).to_dense();
+    auto range_dense = executor->Range(int64_t{2}, OpType::GreaterEqual);
+    EXPECT_TRUE(range_bitmap == range_dense);
+}
+
 TEST(JsonFlatIndexExactPathExistsTest, FiltersByComparableTypeFamily) {
     auto json_index = BuildInMemoryJsonFlatIndex({
         R"({"a": 1})",

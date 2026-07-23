@@ -215,8 +215,8 @@ class PhyConjunctFilterExpr : public Expr {
     // Build the bitmap of rows that still need the following expressions:
     // its count drives the batch-level early exit and the bitmap itself
     // becomes the row-level input of the next expression.
-    TargetBitmap
-    BuildActiveBitmap(const ColumnVectorPtr& vec);
+    Bitmap
+    BuildActiveBitmap(const BitmapVector& vec);
 
     static DataType
     ResolveType(const std::vector<DataType>& inputs);

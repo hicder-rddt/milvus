@@ -121,10 +121,11 @@ PhyExistsFilterExpr::EvalJsonExistsForIndex() {
                 TargetBitmap valid(res.size(), true);
                 return {std::move(res), std::move(valid)};
             });
-        cached_index_chunk_res_ = cached.result;
+        cached_legacy_index_chunk_res_ =
+            std::make_shared<TargetBitmap>(cached.result->to_dense());
     }
     auto res = MoveOrSliceBitmap(
-        *cached_index_chunk_res_, current_index_chunk_pos_, real_batch_size);
+        *cached_legacy_index_chunk_res_, current_index_chunk_pos_, real_batch_size);
     current_index_chunk_pos_ += real_batch_size;
     return res;
 }
@@ -273,11 +274,12 @@ PhyExistsFilterExpr::EvalJsonExistsForDataSegmentByStats() {
                 TargetBitmap valid(active_count_, true);
                 return {std::move(res), std::move(valid)};
             });
-        cached_index_chunk_res_ = cached.result;
+        cached_legacy_index_chunk_res_ =
+            std::make_shared<TargetBitmap>(cached.result->to_dense());
     }
 
     auto res = MoveOrSliceBitmap(
-        *cached_index_chunk_res_, current_data_global_pos_, real_batch_size);
+        *cached_legacy_index_chunk_res_, current_data_global_pos_, real_batch_size);
     MoveCursor();
     return res;
 }

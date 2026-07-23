@@ -101,8 +101,14 @@ class BitmapIndex : public ScalarIndex<T> {
     const TargetBitmap
     In(size_t n, const T* values) override;
 
+    Bitmap
+    InBitmap(size_t n, const T* values) override;
+
     const TargetBitmap
     NotIn(size_t n, const T* values) override;
+
+    Bitmap
+    NotInBitmap(size_t n, const T* values) override;
 
     const TargetBitmap
     IsNull() override;
@@ -113,11 +119,20 @@ class BitmapIndex : public ScalarIndex<T> {
     const TargetBitmap
     Range(const T& value, OpType op) override;
 
+    Bitmap
+    RangeBitmap(const T& value, OpType op) override;
+
     const TargetBitmap
     Range(const T& lower_bound_value,
           bool lb_inclusive,
           const T& upper_bound_value,
           bool ub_inclusive) override;
+
+    Bitmap
+    RangeBitmap(const T& lower_bound_value,
+                bool lb_inclusive,
+                const T& upper_bound_value,
+                bool ub_inclusive) override;
 
     std::optional<T>
     Reverse_Lookup(size_t offset) const override;

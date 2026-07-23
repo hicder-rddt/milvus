@@ -34,7 +34,13 @@ PhyLogicalUnaryExpr::Eval(EvalCtx& context, VectorPtr& result) {
 
     inputs_[0]->Eval(context, result);
     if (expr_->op_type_ == milvus::expr::LogicalUnaryExpr::OpType::LogicalNot) {
-        common::ThreeValuedLogicOp::Not(GetColumnVector(result));
+        auto bitmap = GetBitmapVector(result);
+        if (bitmap == nullptr) {
+            bitmap =
+                BitmapVector::FromColumnVector(GetColumnVector(result));
+        }
+        bitmap->Flip();
+        result = std::move(bitmap);
     }
 }
 

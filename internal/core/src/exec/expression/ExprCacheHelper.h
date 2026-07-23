@@ -21,7 +21,7 @@
 #include <string>
 #include <utility>
 
-#include "common/Types.h"
+#include "common/BitmapVector.h"
 #include "exec/expression/ExprCache.h"
 #include "segcore/SegmentInterface.h"
 
@@ -43,8 +43,8 @@ class BatchedCachedMixin;
 //   auto cached = exec::ExprCacheHelper::GetOrCompute(
 //       segment_, this->ToString(), active_count_,
 //       [&]() -> exec::ExprCacheHelper::ComputeResult {
-//           TargetBitmap res = do_actual_computation();
-//           TargetBitmap valid = compute_valid();
+//           Bitmap res = do_actual_computation();
+//           Bitmap valid = compute_valid();
 //           return {std::move(res), std::move(valid)};
 //       });
 //   result_bitmap = cached.result;
@@ -53,16 +53,16 @@ class BatchedCachedMixin;
 class ExprCacheHelper {
  public:
     struct CachedBitmaps {
-        std::shared_ptr<TargetBitmap> result;
-        std::shared_ptr<TargetBitmap> valid;
+        std::shared_ptr<Bitmap> result;
+        std::shared_ptr<Bitmap> valid;
     };
 
     // Return type of the compute lambda: (result_bitmap, valid_bitmap).
     // Valid bitmap may be all-ones for expressions that don't produce
     // nullability (e.g. unary comparisons on non-nullable fields).
     struct ComputeResult {
-        TargetBitmap result;
-        TargetBitmap valid;
+        Bitmap result;
+        Bitmap valid;
     };
 
     // Try cache; on miss, call `compute`, put result into cache, return.
@@ -114,8 +114,8 @@ class ExprCacheHelper {
         const bool cache_can_write = cache_eligible && enable_cache_write;
         if (!cache_can_write) {
             ComputeResult out = compute();
-            auto result = std::make_shared<TargetBitmap>(std::move(out.result));
-            auto valid = std::make_shared<TargetBitmap>(std::move(out.valid));
+            auto result = std::make_shared<Bitmap>(std::move(out.result));
+            auto valid = std::make_shared<Bitmap>(std::move(out.valid));
             return {result, valid};
         }
 
@@ -126,8 +126,8 @@ class ExprCacheHelper {
                            std::chrono::steady_clock::now() - t0)
                            .count();
 
-        auto result = std::make_shared<TargetBitmap>(std::move(out.result));
-        auto valid = std::make_shared<TargetBitmap>(std::move(out.valid));
+        auto result = std::make_shared<Bitmap>(std::move(out.result));
+        auto valid = std::make_shared<Bitmap>(std::move(out.valid));
 
         ExprResCacheManager::Key key{segment->get_segment_id(), expr_signature};
         ExprResCacheManager::Value v;
@@ -145,7 +145,7 @@ class ExprCacheHelper {
     // The all-ones companion satisfies the existing two-bitmap cache value
     // contract and is compressed efficiently by the memory backend.
     template <typename ComputeFn>
-    static std::shared_ptr<TargetBitmap>
+    static std::shared_ptr<Bitmap>
     GetOrComputeBitmap(const segcore::SegmentInternalInterface* segment,
                        const std::string& artifact_signature,
                        int64_t active_count,
@@ -157,8 +157,8 @@ class ExprCacheHelper {
             active_count,
             [&]() -> ComputeResult {
                 auto result = compute();
-                TargetBitmap valid(result.size(), true);
-                return {std::move(result), std::move(valid)};
+                Bitmap valid(result.size(), true);
+                return {Bitmap(std::move(result)), std::move(valid)};
             },
             enable_cache_write);
         return cached.result;
@@ -205,8 +205,8 @@ class ExprCacheHelper {
 //       }
 //
 //       ExprCacheHelper::ComputeResult ComputeFullBitset() {
-//           TargetBitmap r(active_count_);
-//           TargetBitmap v(active_count_, true);
+//           Bitmap r(active_count_);
+//           Bitmap v(active_count_, true);
 //           for (int64_t i = 0; i < active_count_; ++i) {
 //               r[i] = DoJsonContains(i);
 //           }
@@ -217,8 +217,8 @@ class ExprCacheHelper {
 class BatchedCachedMixin {
  public:
     struct BatchSlice {
-        TargetBitmap result;   // size = actual_batch_size
-        TargetBitmap valid;    // size = actual_batch_size
+        Bitmap result;         // size = actual_batch_size
+        Bitmap valid;          // size = actual_batch_size
         bool has_data{false};  // false when cursor is past the end
     };
 
@@ -248,17 +248,15 @@ class BatchedCachedMixin {
         }
         const int64_t actual =
             std::min<int64_t>(batch_size, total - batch_offset_);
-        out.result = TargetBitmap(actual);
-        out.valid = TargetBitmap(actual);
-        out.result.append(*full_result_, batch_offset_, actual);
-        out.valid.append(*full_valid_, batch_offset_, actual);
+        out.result = full_result_->slice(batch_offset_, actual);
+        out.valid = full_valid_->slice(batch_offset_, actual);
         out.has_data = true;
         batch_offset_ += actual;
         return out;
     }
 
     // Take exclusive ownership of the full bitsets (use_count == 1 after this
-    // call, enabling std::move of the underlying TargetBitmap by the caller).
+    // call, enabling std::move of the underlying Bitmap by the caller).
     // After this call the mixin's internal state is cleared; subsequent
     // NextBatchViaCache / TakeFullBitset calls will reload from cache/recompute.
     //
@@ -317,8 +315,8 @@ class BatchedCachedMixin {
     }
 
  protected:
-    std::shared_ptr<TargetBitmap> full_result_;
-    std::shared_ptr<TargetBitmap> full_valid_;
+    std::shared_ptr<Bitmap> full_result_;
+    std::shared_ptr<Bitmap> full_valid_;
     int64_t batch_offset_{0};
 };
 

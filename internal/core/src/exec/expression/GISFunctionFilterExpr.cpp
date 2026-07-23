@@ -473,7 +473,7 @@ PhyGISFunctionFilterExpr::EvalForIndexSegment() {
         coarse_cached_ = true;
     }
 
-    if (cached_index_chunk_res_ == nullptr) {
+    if (cached_legacy_index_chunk_res_ == nullptr) {
         // Reuse segment-level coarse cache directly
         auto& coarse = coarse_global_;
         // Exact refinement with lambda functions for code reuse
@@ -555,7 +555,7 @@ PhyGISFunctionFilterExpr::EvalForIndexSegment() {
         process_sealed_data(hit_offsets);
 
         // Cache refined result for reuse by subsequent batches
-        cached_index_chunk_res_ =
+        cached_legacy_index_chunk_res_ =
             std::make_shared<TargetBitmap>(std::move(refined));
     }
 
@@ -563,9 +563,9 @@ PhyGISFunctionFilterExpr::EvalForIndexSegment() {
         auto data_pos = current_index_chunk_pos_;
         auto size = std::min(
             std::min(size_per_chunk_ - data_pos, batch_size_ - processed_rows),
-            int64_t(cached_index_chunk_res_->size()));
+            int64_t(cached_legacy_index_chunk_res_->size()));
 
-        batch_result.append(*cached_index_chunk_res_, data_pos, size);
+        batch_result.append(*cached_legacy_index_chunk_res_, data_pos, size);
         batch_valid.append(coarse_valid_global_, data_pos, size);
         processed_rows += size;
         current_index_chunk_pos_ += size;
@@ -578,7 +578,7 @@ PhyGISFunctionFilterExpr::EvalForIndexSegment() {
 
             if (size > 0) {
                 batch_result.append(
-                    *cached_index_chunk_res_, current_index_chunk_pos_, size);
+                    *cached_legacy_index_chunk_res_, current_index_chunk_pos_, size);
                 batch_valid.append(
                     coarse_valid_global_, current_index_chunk_pos_, size);
             }

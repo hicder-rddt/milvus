@@ -35,6 +35,7 @@
 #include "index/IndexStats.h"
 #include "index/Meta.h"
 #include "index/ScalarIndex.h"
+#include "index/Utils.h"
 #include "pb/plan.pb.h"
 #include "pb/schema.pb.h"
 #include "rust-array.h"
@@ -170,11 +171,20 @@ class InvertedIndexTantivy : public ScalarIndex<T> {
     const TargetBitmap
     In(size_t n, const T* values) override;
 
+    Bitmap
+    InBitmap(size_t n, const T* values) override;
+
     const TargetBitmap
     IsNull() override;
 
+    Bitmap
+    IsNullBitmap() override;
+
     TargetBitmap
     IsNotNull() override;
+
+    Bitmap
+    IsNotNullBitmap() override;
 
     const TargetBitmap
     InApplyFilter(
@@ -191,14 +201,26 @@ class InvertedIndexTantivy : public ScalarIndex<T> {
     const TargetBitmap
     NotIn(size_t n, const T* values) override;
 
+    Bitmap
+    NotInBitmap(size_t n, const T* values) override;
+
     const TargetBitmap
     Range(const T& value, OpType op) override;
+
+    Bitmap
+    RangeBitmap(const T& value, OpType op) override;
 
     const TargetBitmap
     Range(const T& lower_bound_value,
           bool lb_inclusive,
           const T& upper_bound_value,
           bool ub_inclusive) override;
+
+    Bitmap
+    RangeBitmap(const T& lower_bound_value,
+                bool lb_inclusive,
+                const T& upper_bound_value,
+                bool ub_inclusive) override;
 
     const bool
     HasRawData() const override {
@@ -238,6 +260,9 @@ class InvertedIndexTantivy : public ScalarIndex<T> {
     virtual const TargetBitmap
     PrefixMatch(const std::string_view prefix);
 
+    virtual Bitmap
+    PrefixMatchBitmap(const std::string_view prefix);
+
     const TargetBitmap
     Query(const DatasetPtr& dataset) override;
 
@@ -260,6 +285,7 @@ class InvertedIndexTantivy : public ScalarIndex<T> {
             }
             case proto::plan::OpType::RegexMatch: {
                 TargetBitmap bitset(Count());
+                auto sink = TantivyHitSink::Dense(bitset);
                 PartialRegexMatcher matcher(pattern);
                 wrapper_->regex_match_query(
                     &matcher,
@@ -271,7 +297,7 @@ class InvertedIndexTantivy : public ScalarIndex<T> {
                             reinterpret_cast<const char*>(term), term_len);
                         return (*matcher)(term_view);
                     },
-                    &bitset);
+                    &sink);
                 return bitset;
             }
             default:
@@ -281,6 +307,10 @@ class InvertedIndexTantivy : public ScalarIndex<T> {
                     op);
         }
     }
+
+    Bitmap
+    PatternMatchBitmap(const std::string& pattern,
+                       proto::plan::OpType op) override;
 
     bool
     SupportPatternMatch() const override {
@@ -325,6 +355,9 @@ class InvertedIndexTantivy : public ScalarIndex<T> {
  protected:
     const TargetBitmap
     PatternQuery(const std::string& pattern) override;
+
+    virtual Bitmap
+    PatternQueryBitmap(const std::string& pattern);
 
     void
     finish();

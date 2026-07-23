@@ -19,11 +19,16 @@
 #include <fmt/core.h>
 
 #include <boost_ext/dynamic_bitset_ext.hpp>
+#include <roaring/roaring.h>
+
 #include <deque>
+#include <limits>
+#include <memory>
 
 #include "bitset/detail/element_wise.h"
 #include "common/Types.h"
 #include "common/EasyAssert.h"
+#include "common/BitmapVector.h"
 #include "knowhere/bitsetview.h"
 
 namespace milvus {
@@ -39,6 +44,10 @@ class BitsetView : public knowhere::BitsetView {
 
     BitsetView(const uint8_t* data, size_t num_bits)
         : knowhere::BitsetView(data, num_bits) {  // NOLINT
+    }
+
+    BitsetView(const knowhere::BitsetView& bitset)  // NOLINT
+        : knowhere::BitsetView(bitset) {
     }
 
     BitsetView(const BitsetType& bitset)  // NOLINT
@@ -65,6 +74,17 @@ class BitsetView : public knowhere::BitsetView {
             }
             return true;
         }
+        if (is_roaring()) {
+            if (roaring() == nullptr) {
+                return false;
+            }
+            for (size_t i = 0; i < size(); ++i) {
+                if (!test(i)) {
+                    return false;
+                }
+            }
+            return true;
+        }
         return bitset::detail::ElementWiseBitsetPolicy<uint8_t>::op_all(
             data(), 0, size());
     }
@@ -76,6 +96,17 @@ class BitsetView : public knowhere::BitsetView {
             return true;
         }
         if (has_out_ids()) {
+            for (size_t i = 0; i < size(); ++i) {
+                if (test(i)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (is_roaring()) {
+            if (roaring() == nullptr) {
+                return true;
+            }
             for (size_t i = 0; i < size(); ++i) {
                 if (test(i)) {
                     return false;
@@ -102,6 +133,61 @@ class BitsetView : public knowhere::BitsetView {
                    this->size());
         return {data() + (offset >> 3), size};
     }
+};
+
+class FrozenRoaringBitsetView {
+ public:
+    explicit FrozenRoaringBitsetView(const TargetBitmapView& bitset) {
+        num_bits_ = bitset.size();
+        num_filtered_out_bits_ = bitset.count();
+        owned_dense_.append(bitset);
+        if (num_bits_ != 0) {
+            view_ = BitsetView(
+                reinterpret_cast<const uint8_t*>(owned_dense_.data()),
+                num_bits_);
+        }
+    }
+
+    explicit FrozenRoaringBitsetView(const BitmapVector& bitset) {
+        num_bits_ = bitset.size();
+        num_filtered_out_bits_ = bitset.count();
+        if (num_bits_ == 0) {
+            return;
+        }
+        if (bitset.result().is_roaring()) {
+            // The caller pins the owning BitmapVector for the complete
+            // synchronous search/iterator lifetime.
+            view_ = BitsetView(knowhere::BitsetView(bitset.bitmap(),
+                                                    num_bits_,
+                                                    num_filtered_out_bits_));
+        } else {
+            owned_dense_ = bitset.result().to_dense();
+            view_ = BitsetView(
+                reinterpret_cast<const uint8_t*>(owned_dense_.data()),
+                num_bits_);
+        }
+    }
+
+    const BitsetView&
+    view() const {
+        return view_;
+    }
+
+    size_t
+    size() const {
+        return num_bits_;
+    }
+
+    size_t
+    count() const {
+        return num_filtered_out_bits_;
+    }
+
+ private:
+    TargetBitmap owned_dense_;
+    size_t num_bits_{0};
+    size_t num_filtered_out_bits_{0};
+    BitsetView view_;
 };
 
 }  // namespace milvus

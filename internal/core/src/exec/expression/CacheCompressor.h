@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "common/Types.h"
+#include "common/BitmapVector.h"
 
 namespace milvus {
 namespace exec {
@@ -70,15 +70,15 @@ class CacheCompressor {
     //   otherwise         → Raw (zero-copy)
     // Valid bitset: if all-ones, skipped entirely (flagged in header).
     static CompressedData
-    Compress(const TargetBitmap& result,
-             const TargetBitmap& valid,
+    Compress(const Bitmap& result,
+             const Bitmap& valid,
              bool compression_enabled);
 
     // Backward-compat: returns a flat buffer (header + payload).
     // Used by tests; production path uses the CompressedData variant directly.
     static std::vector<char>
-    Compress(const TargetBitmap& result,
-             const TargetBitmap& valid,
+    Compress(const Bitmap& result,
+             const Bitmap& valid,
              bool compression_enabled,
              uint8_t& out_comp_type);
 
@@ -86,18 +86,18 @@ class CacheCompressor {
     Decompress(const char* data,
                uint32_t data_len,
                uint8_t comp_type,
-               TargetBitmap& out_result,
-               TargetBitmap& out_valid);
+               Bitmap& out_result,
+               Bitmap& out_valid);
 
  private:
     static std::vector<char>
-    CompressRoaring(const TargetBitmap& bset);
+    CompressRoaring(const Bitmap& bset);
 
     static bool
     DecompressRoaring(const char* data,
                       uint32_t data_len,
                       uint32_t num_bits,
-                      TargetBitmap& out);
+                      Bitmap& out);
 };
 
 }  // namespace exec

@@ -1885,6 +1885,11 @@ TEST(NgramBenchmark, NgramVsTantivyVsBruteForce) {
             if (ngram_index->CanHandleLiteral(bp.term, bp.op_type)) {
                 TargetBitmap candidates(total_count, true);
                 ngram_index->ExecutePhase1(bp.term, bp.op_type, candidates);
+                Bitmap roaring_candidates(total_count, true);
+                ngram_index->ExecutePhase1(
+                    bp.term, bp.op_type, roaring_candidates);
+                auto bitmap_result = roaring_candidates.to_dense();
+                EXPECT_TRUE(bitmap_result == candidates);
                 phase1_cnt = candidates.count();
             }
         }

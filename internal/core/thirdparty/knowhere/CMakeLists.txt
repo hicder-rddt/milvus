@@ -14,10 +14,9 @@
 # Update KNOWHERE_VERSION for the first occurrence
 milvus_add_pkg_config("knowhere")
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES "")
-# Pin zilliztech/knowhere#1745 until the next release; v3.0.6 still pins
-# Cardinal v3.0.3 and an older milvus-common revision.
-set( KNOWHERE_VERSION 16a71a3d )
-set( GIT_REPOSITORY  "https://github.com/zilliztech/knowhere.git")
+# hicder-rddt/knowhere branch hieu/roaring: live roaring_bitmap_t BitsetView.
+set( KNOWHERE_VERSION "709b9984b2405464edaa2a7c71204a3ff112b3c4" )
+set( GIT_REPOSITORY  "https://github.com/hicder-rddt/knowhere.git")
 
 message(STATUS "Knowhere repo: ${GIT_REPOSITORY}")
 message(STATUS "Knowhere version: ${KNOWHERE_VERSION}")

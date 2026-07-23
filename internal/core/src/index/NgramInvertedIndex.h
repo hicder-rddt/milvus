@@ -82,6 +82,11 @@ class NgramInvertedIndex : public InvertedIndexTantivy<std::string> {
                   proto::plan::OpType op_type,
                   TargetBitmap& candidates);
 
+    void
+    ExecutePhase1(const std::string& literal,
+                  proto::plan::OpType op_type,
+                  Bitmap& candidates);
+
     // Phase2: Execute post-filter verification on a specific range
     // - segment_offset: starting position in segment
     // - batch_size: number of rows to process
@@ -107,7 +112,7 @@ class NgramInvertedIndex : public InvertedIndexTantivy<std::string> {
 
     void
     create_reader(SetBitsetFn set_bitset) {
-        this->wrapper_->create_reader(set_bitset);
+        this->wrapper_->create_reader(ToTantivyHitSinkCallback(set_bitset));
     }
 
     void
@@ -122,6 +127,11 @@ class NgramInvertedIndex : public InvertedIndexTantivy<std::string> {
     ApplyIterativeNgramFilter(const std::vector<std::string>& sorted_terms,
                               size_t total_count,
                               TargetBitmap& bitset);
+
+    void
+    ApplyIterativeNgramFilter(const std::vector<std::string>& sorted_terms,
+                              size_t total_count,
+                              Bitmap& bitmap);
 
     bool
     ShouldUseBatchStrategy(double pre_filter_hit_rate) const;

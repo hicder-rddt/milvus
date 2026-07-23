@@ -72,7 +72,7 @@ EvalExprInBatches(const expr::TypedExprPtr& logical_expr,
                    "expression evaluation stopped after {} of {} rows",
                    processed_rows,
                    active_count);
-        auto column = std::dynamic_pointer_cast<ColumnVector>(result);
+        auto column = exec::GetColumnVector(result);
         AssertInfo(column != nullptr && column->IsBitmap(),
                    "expected bitmap column result");
         const auto batch_size = column->size();

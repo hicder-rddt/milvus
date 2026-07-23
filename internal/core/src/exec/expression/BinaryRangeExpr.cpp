@@ -453,10 +453,10 @@ PhyBinaryRangeFilterExpr::ExecRangeVisitorImplForIndex(OffsetVector* input) {
                 dynamic_cast<const Index*>(pinned_index_[0].get());
             AssertInfo(scalar_index != nullptr, "invalid scalar index type");
             auto* index_ptr = const_cast<Index*>(scalar_index);
-            cached_result_ = std::make_shared<TargetBitmap>(
+            cached_result_ = std::make_shared<Bitmap>(
                 execute_sub_batch(index_ptr, val1, val2));
-            cached_valid_result_ = std::make_shared<TargetBitmap>(
-                GetCachedIndexValidBitmap(index_ptr).clone());
+            cached_valid_result_ =
+                std::make_shared<Bitmap>(GetCachedIndexValidBitmap(index_ptr));
             AssertInfo(
                 cached_result_->size() == static_cast<size_t>(active_count_),
                 "index range result size {} does not match row count {}",
@@ -466,13 +466,17 @@ PhyBinaryRangeFilterExpr::ExecRangeVisitorImplForIndex(OffsetVector* input) {
         return GatherCachedResultByOffsets(
             *cached_result_, *cached_valid_result_, *input);
     }
-    auto res = ProcessIndexChunks<T>(execute_sub_batch, val1, val2);
-    AssertInfo(res->size() == real_batch_size,
+    auto index_res = ProcessIndexChunks<T>(execute_sub_batch, val1, val2);
+    auto bitmap_res = GetBitmapVector(index_res);
+    AssertInfo(bitmap_res != nullptr || cached_is_nested_index_,
+               "internal error: row-level scalar index returned a non-bitmap "
+               "result");
+    AssertInfo(index_res->size() == real_batch_size,
                "internal error: expr processed rows {} not equal "
                "expect batch size {}",
-               res->size(),
+               index_res->size(),
                real_batch_size);
-    return res;
+    return index_res;
 }
 
 template <typename T>
@@ -820,11 +824,11 @@ PhyBinaryRangeFilterExpr::ExecRangeVisitorImplForJsonStats(
         auto index = segment->GetJsonStats(op_ctx_, field_id);
         Assert(index.get() != nullptr);
 
-        cached_index_chunk_res_ = std::make_shared<TargetBitmap>(active_count_);
-        cached_index_chunk_valid_res_ =
+        cached_legacy_index_chunk_res_ = std::make_shared<TargetBitmap>(active_count_);
+        cached_legacy_index_chunk_valid_res_ =
             std::make_shared<TargetBitmap>(active_count_);
-        TargetBitmapView res_view(*cached_index_chunk_res_);
-        TargetBitmapView valid_res_view(*cached_index_chunk_valid_res_);
+        TargetBitmapView res_view(*cached_legacy_index_chunk_res_);
+        TargetBitmapView valid_res_view(*cached_legacy_index_chunk_valid_res_);
 
         // process shredding data
         const auto& lower_bound = expr_->lower_val_;
@@ -995,10 +999,10 @@ PhyBinaryRangeFilterExpr::ExecRangeVisitorImplForJsonStats(
 
     if (input != nullptr) {
         return GatherCachedResultByOffsets(
-            *cached_index_chunk_res_, *cached_index_chunk_valid_res_, *input);
+            *cached_legacy_index_chunk_res_, *cached_legacy_index_chunk_valid_res_, *input);
     }
-    auto res = MoveOrSliceBitmap(*cached_index_chunk_res_,
-                                 *cached_index_chunk_valid_res_,
+    auto res = MoveOrSliceBitmap(*cached_legacy_index_chunk_res_,
+                                 *cached_legacy_index_chunk_valid_res_,
                                  current_data_global_pos_,
                                  real_batch_size);
     MoveCursor();
@@ -1168,8 +1172,8 @@ PhyBinaryRangeFilterExpr::ExecRangeVisitorImplForPk(EvalCtx& context) {
 
     if (cached_index_chunk_id_ != 0) {
         cached_index_chunk_id_ = 0;
-        cached_index_chunk_res_ = std::make_shared<TargetBitmap>(active_count_);
-        auto cache_view = cached_index_chunk_res_->view();
+        cached_legacy_index_chunk_res_ = std::make_shared<TargetBitmap>(active_count_);
+        auto cache_view = cached_legacy_index_chunk_res_->view();
 
         PkType lower_pk = lower_arg_.GetValue<PkInnerType>();
         PkType upper_pk = upper_arg_.GetValue<PkInnerType>();
@@ -1182,7 +1186,7 @@ PhyBinaryRangeFilterExpr::ExecRangeVisitorImplForPk(EvalCtx& context) {
     }
 
     auto res = MoveOrSliceBitmap(
-        *cached_index_chunk_res_, current_data_global_pos_, real_batch_size);
+        *cached_legacy_index_chunk_res_, current_data_global_pos_, real_batch_size);
     MoveCursor();
     return res;
 }

@@ -45,6 +45,8 @@
 #include <stdexcept>
 #include <variant>
 
+#include "macos_xsimd_compat.hxx"
+
 // ---- Third-party headers (included in 40+ .cpp files, small parse cost) ----
 #include "fmt/core.h"
 #include "glog/logging.h"

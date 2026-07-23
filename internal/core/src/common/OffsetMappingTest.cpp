@@ -762,4 +762,31 @@ TEST(OffsetMapping, OutOfBoundsReturnsMinusOne) {
     }
 }
 
+TEST(BitsetView, RoaringAllNoneMatchLogicalSemantics) {
+    auto empty_roaring =
+        std::unique_ptr<roaring_bitmap_t, decltype(&roaring_bitmap_free)>(
+            roaring_bitmap_create(), roaring_bitmap_free);
+    BitsetView empty_bits(knowhere::BitsetView(empty_roaring.get(), 4, 0));
+    EXPECT_FALSE(empty_bits.all());
+    EXPECT_TRUE(empty_bits.none());
+
+    auto mixed_roaring =
+        std::unique_ptr<roaring_bitmap_t, decltype(&roaring_bitmap_free)>(
+            roaring_bitmap_create(), roaring_bitmap_free);
+    roaring_bitmap_add(mixed_roaring.get(), 1);
+    BitsetView mixed_bits(knowhere::BitsetView(mixed_roaring.get(), 4, 1));
+    EXPECT_FALSE(mixed_bits.all());
+    EXPECT_FALSE(mixed_bits.none());
+
+    auto full_roaring =
+        std::unique_ptr<roaring_bitmap_t, decltype(&roaring_bitmap_free)>(
+            roaring_bitmap_create(), roaring_bitmap_free);
+    for (uint32_t i = 0; i < 4; ++i) {
+        roaring_bitmap_add(full_roaring.get(), i);
+    }
+    BitsetView full_bits(knowhere::BitsetView(full_roaring.get(), 4, 4));
+    EXPECT_TRUE(full_bits.all());
+    EXPECT_FALSE(full_bits.none());
+}
+
 }  // namespace milvus

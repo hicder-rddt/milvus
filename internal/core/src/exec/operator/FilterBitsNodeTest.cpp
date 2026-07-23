@@ -22,6 +22,7 @@
 
 #include "common/Types.h"
 #include "common/Vector.h"
+#include "common/BitmapVector.h"
 #include "exec/operator/FilterBitsNode.h"
 
 namespace milvus {
@@ -114,6 +115,20 @@ TEST(FilterBitsNodeTest, PredicateConversionFiltersOutInvalidResults) {
     EXPECT_FALSE(used_all_valid_fast_path);
     EXPECT_EQ(ToVector(data), (std::vector<bool>{false, true, true, true}));
     EXPECT_TRUE(valid.all());
+}
+
+TEST(FilterBitsNodeTest, RoaringPredicateConversionFiltersOutInvalidResults) {
+    auto data = MakeBitmap({true, false, true, false});
+    auto valid = MakeBitmap({true, true, false, false});
+    BitmapVector bitmap(std::move(data), std::move(valid));
+
+    const bool used_all_valid_fast_path =
+        ConvertPredicateToFilteredBitset(bitmap);
+
+    EXPECT_FALSE(used_all_valid_fast_path);
+    EXPECT_EQ(ToVector(bitmap.ToTargetBitmap()),
+              (std::vector<bool>{false, true, true, true}));
+    EXPECT_TRUE(bitmap.valid_values_all_valid());
 }
 
 }  // namespace

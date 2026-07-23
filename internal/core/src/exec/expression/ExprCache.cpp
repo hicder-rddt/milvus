@@ -291,7 +291,7 @@ ExprResCacheManager::Get(const Key& key, Value& out_value) {
         if (!entry_pool_) {
             return false;
         }
-        TargetBitmap result(0), valid(0);
+        Bitmap result(0), valid(0);
         if (!entry_pool_->Get(key.segment_id,
                               key.signature,
                               out_value.active_count,
@@ -299,9 +299,8 @@ ExprResCacheManager::Get(const Key& key, Value& out_value) {
                               valid)) {
             return false;
         }
-        out_value.result = std::make_shared<TargetBitmap>(std::move(result));
-        out_value.valid_result =
-            std::make_shared<TargetBitmap>(std::move(valid));
+        out_value.result = std::make_shared<Bitmap>(std::move(result));
+        out_value.valid_result = std::make_shared<Bitmap>(std::move(valid));
         return true;
     } else {
         // Disk mode
@@ -315,9 +314,8 @@ ExprResCacheManager::Get(const Key& key, Value& out_value) {
                 key.signature, out_value.active_count, result, valid)) {
             return false;
         }
-        out_value.result = std::make_shared<TargetBitmap>(std::move(result));
-        out_value.valid_result =
-            std::make_shared<TargetBitmap>(std::move(valid));
+        out_value.result = std::make_shared<Bitmap>(std::move(result));
+        out_value.valid_result = std::make_shared<Bitmap>(std::move(valid));
         TryTouchDiskSegment(key.segment_id);
         return true;
     }
@@ -421,10 +419,9 @@ ExprResCacheManager::Put(const Key& key, const Value& value) {
                 static_cast<int64_t>(value.result->size()),
                 config_.disk_max_file_size);
         }
-        file->Put(key.signature,
-                  value.active_count,
-                  *value.result,
-                  *value.valid_result);
+        auto dense_result = value.result->to_dense();
+        auto dense_valid = value.valid_result->to_dense();
+        file->Put(key.signature, value.active_count, dense_result, dense_valid);
         TouchDiskSegment(key.segment_id);
         EvictDiskSegmentsUntilWithinBudget(key.segment_id);
         SyncUsageMetrics(0, GetDiskCurrentBytesLocked());

@@ -138,41 +138,38 @@ PhyRandomSampleNode::GetOutput() {
 
     RowVectorPtr result = nullptr;
     if (!is_source_node_) {
-        auto input_col = GetColumnVector(input_);
-        TargetBitmapView input_data(input_col->GetRawData(), input_col->size());
-        // note: false means the elemnt is hit
-        size_t input_false_count = input_data.size() - input_data.count();
+        auto input_roaring = GetBitmapVector(input_);
+        if (input_roaring == nullptr) {
+            input_roaring =
+                BitmapVector::FromColumnVector(GetColumnVector(input_));
+        }
+        // note: false means the element is hit
+        size_t input_false_count =
+            input_roaring->size() - input_roaring->count();
+        auto sample_output =
+            std::make_shared<BitmapVector>(input_roaring->size(), true);
+        sample_output->SetAll();
 
         if (input_false_count > 0) {
-            FixedVector<uint32_t> pos{};
-            pos.reserve(input_false_count);
-            auto value = input_data.find_first(false);
-            while (value.has_value()) {
-                auto offset = value.value();
-                pos.push_back(offset);
-                value = input_data.find_next(offset, false);
-            }
-            assert(pos.size() == input_false_count);
-
-            input_data.set();
             auto sampled = Sample(input_false_count, factor_);
             assert(sampled.back() < input_false_count);
             for (auto i = 0; i < sampled.size(); ++i) {
-                input_data[pos[sampled[i]]] = false;
+                sample_output->Remove(input_roaring->SelectFalse(sampled[i]));
             }
+        }
+        if (!input_roaring->valid_values_all_valid()) {
+            TargetBitmap valid_values;
+            input_roaring->AppendValidValuesTo(
+                valid_values, 0, input_roaring->size());
+            sample_output->set_valid_values(std::move(valid_values));
         }
 
         result = std::make_shared<RowVector>(
-            std::vector<VectorPtr>{std::move(input_col)});
+            std::vector<VectorPtr>{std::move(sample_output)});
     } else {
-        auto sample_output = std::make_shared<ColumnVector>(
-            TargetBitmap(active_count_), TargetBitmap(active_count_));
-        TargetBitmapView data(sample_output->GetRawData(),
-                              sample_output->size());
-        // true in TargetBitmap means we don't want this row, while for readability, we set the relevant row be true
-        // if it's sampled. So we need to flip the bits at last.
-        // However, if sample rate is larger than 0.5, we use 1-factor for sampling so that in some cases, the sampling
-        // performance would be better. In that case, we don't need to flip at last.
+        auto sample_output =
+            std::make_shared<BitmapVector>(active_count_, true);
+        // true in TargetBitmap means we don't want this row.
         bool need_flip = true;
         float factor = factor_;
         if (factor > 0.5) {
@@ -180,12 +177,14 @@ PhyRandomSampleNode::GetOutput() {
             factor = 1.0 - factor;
         }
         auto sampled = Sample(active_count_, factor);
-        for (auto n : sampled) {
-            data[n] = true;
-        }
 
         if (need_flip) {
-            data.flip();
+            sample_output->SetAll();
+            for (auto n : sampled) {
+                sample_output->Remove(n);
+            }
+        } else {
+            sample_output->AddMany(sampled.data(), sampled.size());
         }
 
         result = std::make_shared<RowVector>(
@@ -200,10 +199,10 @@ PhyRandomSampleNode::GetOutput() {
         duration / 1000);
 
     if (result) {
-        auto result_col = GetColumnVector(result);
-        TargetBitmapView result_data(result_col->GetRawData(),
-                                     result_col->size());
-        auto sampled_count = result_col->size() - result_data.count();
+        auto result_roaring = GetBitmapVector(result);
+        AssertInfo(result_roaring != nullptr,
+                   "PhyRandomSampleNode result should be roaring bitmap");
+        auto sampled_count = result_roaring->size() - result_roaring->count();
         tracer::AddEvent(fmt::format("sampled_count: {}, total_count: {}",
                                      sampled_count,
                                      active_count_));

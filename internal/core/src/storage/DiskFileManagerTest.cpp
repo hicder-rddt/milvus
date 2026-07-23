@@ -154,6 +154,15 @@ CollectOffsetMappingMmapFiles(const std::string& root_path,
     return files;
 }
 
+bool
+DiskAnnAvailable(const std::shared_ptr<milvus::FileManager>& file_manager) {
+    auto created = knowhere::IndexFactory::Instance().Create<float>(
+        knowhere::IndexEnum::INDEX_DISKANN,
+        knowhere::Version::GetCurrentVersion().VersionNumber(),
+        knowhere::Pack(file_manager));
+    return created.has_value();
+}
+
 }  // namespace
 
 TEST_F(DiskAnnFileManagerTest, AddFilePositiveParallel) {
@@ -866,6 +875,9 @@ TEST_F(DiskAnnFileManagerTest, LoadStreamIndexCachesOnlyValidDataSidecar) {
         field_data_meta, index_meta, cm_, fs_);
     auto file_manager =
         std::make_shared<DiskFileManagerImpl>(file_manager_context);
+    if (!DiskAnnAvailable(file_manager)) {
+        GTEST_SKIP() << "DISKANN is not available in this build";
+    }
     auto local_chunk_manager =
         LocalChunkManagerSingleton::GetInstance().GetChunkManager();
     auto local_index_prefix = file_manager->GetLocalIndexObjectPrefix();
@@ -1668,6 +1680,10 @@ TEST_F(DiskAnnFileManagerTest, BuildAllNullNullableDiskVectorIndexFromDataset) {
                             dim};
     storage::FileManagerContext file_manager_context(
         field_data_meta, index_meta, cm_, fs_);
+    if (!DiskAnnAvailable(
+            std::make_shared<DiskFileManagerImpl>(file_manager_context))) {
+        GTEST_SKIP() << "DISKANN is not available in this build";
+    }
     milvus::index::VectorDiskAnnIndex<float> index(
         DataType::NONE,
         knowhere::IndexEnum::INDEX_DISKANN,
@@ -1728,6 +1744,10 @@ TEST_F(DiskAnnFileManagerTest, LoadAllNullNullableDiskVectorIndexFromDataset) {
                             dim};
     storage::FileManagerContext file_manager_context(
         field_data_meta, index_meta, cm_, fs_);
+    if (!DiskAnnAvailable(
+            std::make_shared<DiskFileManagerImpl>(file_manager_context))) {
+        GTEST_SKIP() << "DISKANN is not available in this build";
+    }
 
     std::vector<std::string> files;
     {
@@ -1850,6 +1870,10 @@ TEST_F(DiskAnnFileManagerTest, BuildAllValidEmptyEmbListDiskIndexFromDataset) {
                             dim};
     storage::FileManagerContext file_manager_context(
         field_data_meta, index_meta, cm_, fs_);
+    if (!DiskAnnAvailable(
+            std::make_shared<DiskFileManagerImpl>(file_manager_context))) {
+        GTEST_SKIP() << "DISKANN is not available in this build";
+    }
     milvus::index::VectorDiskAnnIndex<float> index(
         DataType::VECTOR_FLOAT,
         knowhere::IndexEnum::INDEX_DISKANN,
@@ -1989,6 +2013,10 @@ TEST_F(DiskAnnFileManagerTest, BuildAllValidEmptyEmbListDiskIndexFromBinlog) {
                             dim};
     storage::FileManagerContext file_manager_context(
         field_data_meta, index_meta, cm_, fs_);
+    if (!DiskAnnAvailable(
+            std::make_shared<DiskFileManagerImpl>(file_manager_context))) {
+        GTEST_SKIP() << "DISKANN is not available in this build";
+    }
     milvus::index::VectorDiskAnnIndex<float> index(
         DataType::VECTOR_FLOAT,
         knowhere::IndexEnum::INDEX_DISKANN,
