@@ -47,6 +47,12 @@ endif ()
 if (DEFINED __AARCH64)
     #aarch64 platform use 64k pagesize.
     list(APPEND JEMALLOC_CONFIGURE_COMMAND "--with-lg-page=16")
+    # --disable-cxx: LD_PRELOAD of a C++-enabled libjemalloc.so pulls in
+    # libstdc++ and exports operator new/delete. Kitware's aarch64 cmake
+    # statically links libstdc++ and exports GNU UNIQUE locale::id symbols;
+    # those merge with the preloaded libstdc++ and cmake segfaults. malloc
+    # interposition is enough — C++ new still reaches jemalloc via malloc.
+    list(APPEND JEMALLOC_CONFIGURE_COMMAND "--disable-cxx")
 endif ()
 
 list(APPEND
